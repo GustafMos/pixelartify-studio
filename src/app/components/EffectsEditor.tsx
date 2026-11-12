@@ -9,7 +9,7 @@ import {
   createPreprocessOp,
   type EffectDefinition,
 } from '../../core/preprocess';
-import { ColorField, IconButton, Section, Slider } from './controls';
+import { ColorField, IconButton, Section, Slider, Toggle } from './controls';
 import { Icon } from './icons';
 
 type AnyOp = PreprocessOp | PostprocessOp;
@@ -132,19 +132,29 @@ export function EffectsEditor<T extends PreprocessType | PostprocessType>({
               {isOpen ? (
                 <div className="effect-body">
                   <p className="effect-desc">{def.description}</p>
-                  {def.params.map((param) => (
-                    <Slider
-                      key={param.key}
-                      label={param.label}
-                      value={op.params[param.key] ?? param.default}
-                      min={param.min}
-                      max={param.max}
-                      step={param.step}
-                      unit={param.unit}
-                      hint={param.hint}
-                      onChange={(value) => updateParam(op.id, param.key, value)}
-                    />
-                  ))}
+                  {def.params.map((param) =>
+                    param.kind === 'toggle' ? (
+                      <Toggle
+                        key={param.key}
+                        label={param.label}
+                        checked={(op.params[param.key] ?? param.default) > 0.5}
+                        hint={param.hint}
+                        onChange={(checked) => updateParam(op.id, param.key, checked ? 1 : 0)}
+                      />
+                    ) : (
+                      <Slider
+                        key={param.key}
+                        label={param.label}
+                        value={op.params[param.key] ?? param.default}
+                        min={param.min}
+                        max={param.max}
+                        step={param.step}
+                        unit={param.unit}
+                        hint={param.hint}
+                        onChange={(value) => updateParam(op.id, param.key, value)}
+                      />
+                    ),
+                  )}
                   {def.colorParam ? (
                     <ColorField
                       label="Outline colour"

@@ -9,12 +9,14 @@ const TYPE_LABEL: Record<SocketType, string> = {
   media: 'media',
   mask: 'mask',
   palette: 'palette',
+  motion: 'motion',
 };
 
 const TYPE_TONE: Record<SocketType, 'accent' | 'success' | 'warn'> = {
   media: 'accent',
   mask: 'success',
   palette: 'warn',
+  motion: 'accent',
 };
 
 export function ConnectionsPanel({ node }: { node: GraphNode }): React.ReactElement | null {

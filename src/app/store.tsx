@@ -60,6 +60,7 @@ import { buildMagicMask, trackMagicMaskFrame, type MagicSeed } from '../core/mag
 import { resizeMask } from '../core/image';
 import type { TrackedMaskSequence } from '../core/graph';
 import { grabVideoFrame, probeVideo, extractVideoFrames, type VideoProbe } from './video';
+import { animationSettings, playbackPaletteKey, playbackSettings } from './playback';
 
 export interface AssetRecord {
   id: string;
@@ -120,6 +121,15 @@ interface StudioContextValue {
   videoFrame: PixelImage | null;
   videoFrameLoading: boolean;
   videoPlaying: boolean;
+  animationTime: number;
+  animationPlaying: boolean;
+  hasAnimation: boolean;
+  animationDuration: number;
+  animationFps: number;
+  animationLoop: boolean;
+  setAnimationTime: (time: number) => void;
+  setAnimationPlaying: (playing: boolean) => void;
+  renderAnimationFrame: (time: number) => RenderResult | null;
   subjectSelect: { nodeId: string; maskId: string; mode: 'magic' | 'box' } | null;
   maskTracking: { key: string; done: number; total: number } | null;
   trackedMasks: Record<string, TrackedMaskSequence>;
@@ -221,6 +231,8 @@ export function StudioProvider({ children }: { children: React.ReactNode }): Rea
   const [videoFrame, setVideoFrame] = useState<PixelImage | null>(null);
   const [videoFrameLoading, setVideoFrameLoading] = useState(false);
   const [videoPlaying, setVideoPlayingState] = useState(false);
+  const [animationTime, setAnimationTimeState] = useState(0);
+  const [animationPlaying, setAnimationPlayingState] = useState(false);
   const [subjectSelect, setSubjectSelect] = useState<{
     nodeId: string;
     maskId: string;
@@ -241,6 +253,7 @@ export function StudioProvider({ children }: { children: React.ReactNode }): Rea
   const toastIdRef = useRef(1);
   const renderGenRef = useRef(0);
   const videoLoadRef = useRef(0);
+  const animationPaletteRef = useRef<{ key: string; colors: string[] } | null>(null);
 
   const notify = useCallback((message: string, kind: Toast['kind'] = 'info') => {
     const id = toastIdRef.current++;
@@ -311,6 +324,17 @@ export function StudioProvider({ children }: { children: React.ReactNode }): Rea
     () => graph.nodes.find((n) => n.id === selectedNodeId) ?? null,
     [graph.nodes, selectedNodeId],
   );
+  const animationNode = useMemo(
+    () => graph.nodes.find((n) => n.type === 'animate') ?? null,
+    [graph.nodes],
+  );
+  const hasAnimation = Boolean(animationNode);
+  const animationDuration = Math.max(
+    0.1,
+    Number(animationNode?.params.duration ?? 4) || 4,
+  );
+  const animationFps = Math.max(1, Math.round(Number(animationNode?.params.fps ?? 24) || 24));
+  const animationLoop = Boolean(animationNode?.params.loop);
 
   useEffect(() => {
     if (outputs.length === 0) {
@@ -332,8 +356,9 @@ export function StudioProvider({ children }: { children: React.ReactNode }): Rea
         assetsByNode: assetsByNode as unknown as Record<string, GraphAsset[]>,
         maskCache: maskCacheRef.current,
         maskOverrides,
+        time: videoTime + animationTime,
       }),
-    [graph, assetsByNode, maskOverrides],
+    [graph, assetsByNode, maskOverrides, videoTime, animationTime],
   );
 
   const graphErrors = useMemo(() => validateGraph(graph), [graph]);
@@ -365,8 +390,8 @@ export function StudioProvider({ children }: { children: React.ReactNode }): Rea
       return;
     }
     // Playback frames are painted directly by the viewer; don't re-render the
-    // whole React tree for every video frame.
-    if (videoPlaying && activeAsset?.kind === 'video') {
+    // whole React tree for every video or animation frame.
+    if ((videoPlaying && activeAsset?.kind === 'video') || animationPlaying) {
       setIsRendering(false);
       return;
     }
@@ -390,6 +415,7 @@ export function StudioProvider({ children }: { children: React.ReactNode }): Rea
             upscale: false,
             seed: 0,
             maxWorkingSide: previewFullQuality ? 2048 : 1200,
+            time: animationTime + videoTime,
           },
         );
         if (gen === renderGenRef.current) {
@@ -405,7 +431,64 @@ export function StudioProvider({ children }: { children: React.ReactNode }): Rea
     }, 110);
 
     return () => window.clearTimeout(timer);
-  }, [previewNode, activeItem, activeAsset, videoFrame, videoPlaying, previewFullQuality, videoTime, trackedMasks]);
+  }, [
+    previewNode,
+    activeItem,
+    activeAsset,
+    videoFrame,
+    videoPlaying,
+    animationPlaying,
+    previewFullQuality,
+    videoTime,
+    animationTime,
+    trackedMasks,
+  ]);
+
+  /**
+   * Render one animation frame at `time` without touching React state. The
+   * viewer's animation loop paints the result directly to the preview canvas.
+   */
+  const renderAnimationFrame = useCallback(
+    (time: number): RenderResult | null => {
+      if (!previewNode) return null;
+      const ev = evaluateGraph(graph, {
+        assetsByNode: assetsByNode as unknown as Record<string, GraphAsset[]>,
+        maskCache: maskCacheRef.current,
+        maskOverrides,
+        time,
+        maxGeneratedSide: 256,
+      });
+      const items = mediaAtPort(ev, previewNode.id);
+      if (items.length === 0) return null;
+      const item = items.find((i) => i.assetId === activeAsset?.id) ?? items[0];
+      const base = settingsFromItem(item);
+      const settings = animationSettings(base, item);
+      const paletteKey = playbackPaletteKey(
+        base,
+        `${activeAsset?.id ?? 'animation'}:${previewNode.id}`,
+      );
+      const paletteOverride =
+        animationPaletteRef.current?.key === paletteKey
+          ? animationPaletteRef.current.colors
+          : undefined;
+      const result = renderPixelArt(
+        { image: item.source, masks: item.masks, settings },
+        {
+          stopAfter: stopStageForNode(previewNode.type),
+          upscale: false,
+          seed: 0,
+          maxWorkingSide: 192,
+          paletteOverride,
+          time,
+        },
+      );
+      if (result.palette.length > 0) {
+        animationPaletteRef.current = { key: paletteKey, colors: result.palette };
+      }
+      return result;
+    },
+    [graph, assetsByNode, maskOverrides, previewNode, activeAsset?.id],
+  );
 
   // Persist the graph and libraries.
   useEffect(() => {
@@ -459,6 +542,10 @@ export function StudioProvider({ children }: { children: React.ReactNode }): Rea
   }, [activeAsset?.id]);
 
   useEffect(() => {
+    if (!hasAnimation) setAnimationPlayingState(false);
+  }, [hasAnimation]);
+
+  useEffect(() => {
     setSubjectSelect(null);
   }, [activeAsset?.id]);
 
@@ -480,6 +567,12 @@ export function StudioProvider({ children }: { children: React.ReactNode }): Rea
   const setVideoPlaying = useCallback((playing: boolean) => {
     setVideoPlayingState(playing);
     if (!playing) setVideoFrameLoading(false);
+  }, []);
+  const setAnimationTime = useCallback((time: number) => {
+    setAnimationTimeState(Math.max(0, Number.isFinite(time) ? time : 0));
+  }, []);
+  const setAnimationPlaying = useCallback((playing: boolean) => {
+    setAnimationPlayingState(playing);
   }, []);
   const beginSubjectSelect = useCallback(
     (nodeId: string, maskId: string, mode: 'magic' | 'box' = 'magic') => {
@@ -505,6 +598,12 @@ export function StudioProvider({ children }: { children: React.ReactNode }): Rea
       edges: Array<{ id: string; toNode: string; toPort: string }>;
     }> = [];
     let connect: { fromNode: string; fromPort: string; toPort: string } | null = null;
+    let motionLink: {
+      fromNode: string;
+      fromPort: string;
+      toNode: string;
+      toPort: string;
+    } | null = null;
 
     if (anchor) {
       px = anchor.x + 260;
@@ -565,6 +664,27 @@ export function StudioProvider({ children }: { children: React.ReactNode }): Rea
     }
 
     const node = createNode(type, px ?? 80, py ?? 200, nodeParams(type, settings), settings);
+    if (anchor) {
+      const anchorMotionIn = NODE_DEFS[anchor.type].inputs.find((p) => p.type === 'motion');
+      const newMotionOut = def.outputs.find((p) => p.type === 'motion');
+      const anchorMotionOut = NODE_DEFS[anchor.type].outputs.find((p) => p.type === 'motion');
+      const newMotionIn = def.inputs.find((p) => p.type === 'motion');
+      if (newMotionOut && anchorMotionIn) {
+        motionLink = {
+          fromNode: node.id,
+          fromPort: newMotionOut.id,
+          toNode: anchor.id,
+          toPort: anchorMotionIn.id,
+        };
+      } else if (anchorMotionOut && newMotionIn) {
+        motionLink = {
+          fromNode: anchor.id,
+          fromPort: anchorMotionOut.id,
+          toNode: node.id,
+          toPort: newMotionIn.id,
+        };
+      }
+    }
     mutateGraph((g) => {
       let next: PipelineGraph = { ...g, nodes: [...g.nodes, node] };
       if (plans.length > 0) {
@@ -611,6 +731,21 @@ export function StudioProvider({ children }: { children: React.ReactNode }): Rea
             },
           ],
         };
+      }
+      if (motionLink) {
+        const exists = next.edges.some(
+          (edge) =>
+            edge.fromNode === motionLink!.fromNode &&
+            edge.fromPort === motionLink!.fromPort &&
+            edge.toNode === motionLink!.toNode &&
+            edge.toPort === motionLink!.toPort,
+        );
+        if (!exists) {
+          next = {
+            ...next,
+            edges: [...next.edges, { id: uid('edge'), ...motionLink }],
+          };
+        }
       }
       return next;
     });
@@ -1167,7 +1302,7 @@ export function StudioProvider({ children }: { children: React.ReactNode }): Rea
       const settings = applyOutputSettings(activeItem);
       const result = renderPixelArt(
         { image: activeAsset?.kind === 'video' && videoFrame ? videoFrame : activeItem.source, masks: activeItem.masks, settings },
-        { upscale: true },
+        { upscale: true, time: animationTime + videoTime },
       );
       const blob = await pixelImageToBlob(result.art, settings.output.format, settings.output.quality);
       const name = activeAsset?.name ?? 'pixelart';
@@ -1203,7 +1338,16 @@ export function StudioProvider({ children }: { children: React.ReactNode }): Rea
       setIsExporting(false);
       setExportProgress(null);
     }
-  }, [activeAsset, activeItem, notify, previewNode, videoFrame, applyOutputSettings]);
+  }, [
+    activeAsset,
+    activeItem,
+    notify,
+    previewNode,
+    videoFrame,
+    animationTime,
+    videoTime,
+    applyOutputSettings,
+  ]);
 
   const exportLayers = useCallback(async () => {
     if (!activeItem) {
@@ -1214,7 +1358,10 @@ export function StudioProvider({ children }: { children: React.ReactNode }): Rea
     setExportProgress('Rendering layers…');
     try {
       const settings = applyOutputSettings(activeItem);
-      const result = renderPixelArt({ image: activeItem.source, masks: activeItem.masks, settings }, { upscale: false });
+      const result = renderPixelArt(
+        { image: activeItem.source, masks: activeItem.masks, settings },
+        { upscale: false, time: animationTime + videoTime },
+      );
       const entries: Array<{ name: string; data: Blob | string }> = [];
       const base = (activeAsset?.name ?? 'pixelart').replace(/\.[^.]+$/, '');
       for (const layer of result.layers) {
@@ -1251,7 +1398,7 @@ export function StudioProvider({ children }: { children: React.ReactNode }): Rea
       setIsExporting(false);
       setExportProgress(null);
     }
-  }, [activeAsset, activeItem, notify, applyOutputSettings]);
+  }, [activeAsset, activeItem, notify, animationTime, videoTime, applyOutputSettings]);
 
   const exportBatch = useCallback(async () => {
     const outputId = selectedOutputId;
@@ -1271,7 +1418,10 @@ export function StudioProvider({ children }: { children: React.ReactNode }): Rea
         const item = items[i];
         setExportProgress(`Rendering ${i + 1} / ${items.length}: ${item.name}`);
         const settings = applyOutputSettings(item);
-        const result = renderPixelArt({ image: item.source, masks: item.masks, settings }, { upscale: true });
+        const result = renderPixelArt(
+          { image: item.source, masks: item.masks, settings },
+          { upscale: true, time: animationTime + videoTime },
+        );
         const blob = await pixelImageToBlob(result.art, settings.output.format, settings.output.quality);
         files.push({
           name: formatFilename(settings.output.filenamePattern, {
@@ -1309,7 +1459,7 @@ export function StudioProvider({ children }: { children: React.ReactNode }): Rea
       setIsExporting(false);
       setExportProgress(null);
     }
-  }, [evaluation, notify, selectedOutputId, applyOutputSettings]);
+  }, [evaluation, notify, selectedOutputId, animationTime, videoTime, applyOutputSettings]);
 
   const exportSpritesheet = useCallback(async (assetOverride?: AssetRecord) => {
     const asset = assetOverride ?? activeAsset;
@@ -1362,6 +1512,15 @@ export function StudioProvider({ children }: { children: React.ReactNode }): Rea
     videoFrame,
     videoFrameLoading,
     videoPlaying,
+    animationTime,
+    animationPlaying,
+    hasAnimation,
+    animationDuration,
+    animationFps,
+    animationLoop,
+    setAnimationTime,
+    setAnimationPlaying,
+    renderAnimationFrame,
     subjectSelect,
     maskTracking,
     trackedMasks,

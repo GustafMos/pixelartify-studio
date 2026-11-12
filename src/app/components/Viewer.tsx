@@ -26,6 +26,15 @@ export function Viewer({ resizeKey }: { resizeKey?: number | string } = {}): Rea
     videoFrameLoading,
     videoPlaying,
     setVideoPlaying,
+    animationTime,
+    animationPlaying,
+    hasAnimation,
+    animationDuration,
+    animationFps,
+    animationLoop,
+    setAnimationTime,
+    setAnimationPlaying,
+    renderAnimationFrame,
     activeItem,
     subjectSelect,
     endSubjectSelect,
@@ -60,6 +69,8 @@ export function Viewer({ resizeKey }: { resizeKey?: number | string } = {}): Rea
   const playbackPaletteRef = useRef<{ key: string; colors: string[] } | null>(null);
   const videoTimeRef = useRef(videoTime);
   videoTimeRef.current = videoTime;
+  const animationTimeRef = useRef(animationTime);
+  animationTimeRef.current = animationTime;
   const [scale, setScale] = useState(1);
   const [pan, setPan] = useState({ x: 0, y: 0 });
   const [showGrid, setShowGrid] = useState(true);
@@ -225,7 +236,7 @@ export function Viewer({ resizeKey }: { resizeKey?: number | string } = {}): Rea
             : undefined;
         const result = renderPixelArt(
           { image: source, masks: activeItem.masks, settings: renderSettings },
-          { upscale: false, seed: 0, maxWorkingSide: 384, paletteOverride },
+          { upscale: false, seed: 0, maxWorkingSide: 384, paletteOverride, time },
         );
         if (result.palette.length > 0) {
           playbackPaletteRef.current = { key: paletteKey, colors: result.palette };
@@ -266,6 +277,64 @@ export function Viewer({ resizeKey }: { resizeKey?: number | string } = {}): Rea
     videoPlaying,
   ]);
 
+  // Animation playback for generated/still scenes. Frames are painted directly
+  // to the art canvas so React does not re-render the editor at 24 fps.
+  useEffect(() => {
+    if (!animationPlaying) return;
+    if (activeAsset?.kind === 'video') {
+      setAnimationPlaying(false);
+      return;
+    }
+    let stopped = false;
+    let timer = 0;
+    let lastUpdate = 0;
+    const start = performance.now();
+    const base = animationTimeRef.current;
+
+    const tick = (): void => {
+      if (stopped) return;
+      const elapsed = (performance.now() - start) / 1000;
+      let t = base + elapsed;
+      if (animationLoop && animationDuration > 0) t %= animationDuration;
+      const frameStart = performance.now();
+      try {
+        const result = renderAnimationFrame(t);
+        if (result) paintArt(result.art);
+        if (frameStart - lastUpdate > 250) {
+          lastUpdate = frameStart;
+          setAnimationTime(t);
+        }
+      } catch (err) {
+        stopped = true;
+        setAnimationPlaying(false);
+        notify(
+          `Animation frame failed: ${err instanceof Error ? err.message : err}`,
+          'error',
+        );
+        return;
+      }
+      const budget = 1000 / Math.max(1, animationFps);
+      timer = window.setTimeout(tick, Math.max(0, budget - (performance.now() - frameStart)));
+    };
+
+    tick();
+    return () => {
+      stopped = true;
+      window.clearTimeout(timer);
+    };
+  }, [
+    animationPlaying,
+    animationLoop,
+    animationDuration,
+    animationFps,
+    activeAsset?.kind,
+    notify,
+    paintArt,
+    renderAnimationFrame,
+    setAnimationPlaying,
+    setAnimationTime,
+  ]);
+
   const togglePlayback = useCallback(() => {
     const el = videoElRef.current;
     if (!el) return;
@@ -280,6 +349,15 @@ export function Viewer({ resizeKey }: { resizeKey?: number | string } = {}): Rea
     }
     setVideoPlaying(true);
   }, [videoPlaying, videoTime, setVideoPlaying, setVideoTime]);
+
+  const toggleAnimation = useCallback(() => {
+    if (!hasAnimation) return;
+    if (animationPlaying) {
+      setAnimationPlaying(false);
+      return;
+    }
+    setAnimationPlaying(true);
+  }, [hasAnimation, animationPlaying, setAnimationPlaying]);
 
   const normalizeSubjectPoint = useCallback((clientX: number, clientY: number) => {
     const el = wrapperRef.current;
@@ -766,6 +844,7 @@ export function Viewer({ resizeKey }: { resizeKey?: number | string } = {}): Rea
           {effectsActive ? <Badge tone="success">GPU effects</Badge> : null}
           {layersActive ? <Badge tone="success">GPU layers</Badge> : null}
           {videoPlaying ? <Badge tone="warn">Playback preview</Badge> : null}
+          {animationPlaying ? <Badge tone="warn">Animation preview</Badge> : null}
         </div>
         <div className="viewer-toolbar-right">
           <IconButton
@@ -1142,6 +1221,33 @@ export function Viewer({ resizeKey }: { resizeKey?: number | string } = {}): Rea
             {videoTime.toFixed(2)} / {activeAsset.duration.toFixed(2)} s
           </span>
           {videoFrameLoading && !videoPlaying ? <Spinner /> : null}
+        </div>
+      ) : null}
+      {hasAnimation && activeAsset?.kind !== 'video' ? (
+        <div className="video-timeline animation-timeline">
+          <IconButton
+            icon={animationPlaying ? 'pause' : 'play'}
+            label={animationPlaying ? 'Pause animation' : 'Play animation'}
+            size={16}
+            onClick={toggleAnimation}
+          />
+          <Icon name="wave" size={15} />
+          <input
+            type="range"
+            min={0}
+            max={animationLoop ? animationDuration : Math.max(animationDuration, animationTime)}
+            step={1 / Math.max(1, animationFps)}
+            value={animationLoop ? Math.min(animationTime, animationDuration) : animationTime}
+            onChange={(e) => {
+              setAnimationPlaying(false);
+              setAnimationTime(Number(e.target.value));
+            }}
+            aria-label="Animation time"
+          />
+          <span className="time-readout">
+            {animationTime.toFixed(2)} / {animationLoop ? animationDuration.toFixed(2) : '∞'} s
+          </span>
+          <Badge tone="neutral">{animationFps} fps</Badge>
         </div>
       ) : null}
     </div>

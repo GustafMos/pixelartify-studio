@@ -374,7 +374,8 @@ function opUniforms(
           clamp01(p.amount ?? 0.12),
           Math.max(0.5, (p.scale ?? 1) * scale),
           (p.monochrome ?? 1) > 0.5 ? 1 : 0,
-          Math.round(p.seed ?? 7),
+          Math.round(p.seed ?? 7) +
+            ((p.animated ?? 0) > 0.5 ? Math.floor((ctx.time ?? 0) * 24) * 101 : 0),
         ],
         b: [0, 0, 0, 0],
         color: [0, 0, 0, 0],

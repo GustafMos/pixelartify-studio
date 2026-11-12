@@ -39,6 +39,43 @@ export function playbackSettings(
   return settings;
 }
 
+/**
+ * Settings for continuous animation preview. Smaller than video playback
+ * because each frame re-evaluates the graph (including 3D renders). Pausing
+ * restores full quality.
+ */
+export function animationSettings(
+  settings: PixelArtifySettings,
+  item: GraphMediaItem,
+): PixelArtifySettings {
+  if (settings.pixelate.enabled === false) return settings;
+  const art = computeArtSize(item.sourceWidth, item.sourceHeight, settings.resolution);
+  const short = Math.min(art.width, art.height);
+  const area = art.width * art.height;
+  const cpuDither =
+    settings.dither.algorithm !== 'none' &&
+    !(gpuDitherAvailable() && supportsGpuDither(settings.dither.algorithm));
+  const budget = cpuDither ? 12_000 : 24_000;
+  if (area > budget) {
+    const scale = Math.sqrt(budget / area);
+    return {
+      ...settings,
+      resolution: {
+        ...settings.resolution,
+        mode: 'short-side',
+        value: Math.max(2, Math.round(short * scale)),
+      },
+    };
+  }
+  if (short > 256) {
+    return {
+      ...settings,
+      resolution: { ...settings.resolution, mode: 'short-side', value: 256 },
+    };
+  }
+  return settings;
+}
+
 /** Stable cache key for the palette resolved during playback. */
 export function playbackPaletteKey(settings: PixelArtifySettings, assetId: string): string {
   return [

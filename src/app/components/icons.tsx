@@ -42,7 +42,8 @@ type IconName =
   | 'save'
   | 'folderOpen'
   | 'background'
-  | 'cube';
+  | 'cube'
+  | 'wave';
 
 const PATHS: Record<IconName, React.ReactNode> = {
   image: (
@@ -205,6 +206,12 @@ const PATHS: Record<IconName, React.ReactNode> = {
     <>
       <path d="M12 3 21 8v8l-9 5-9-5V8z" />
       <path d="m3 8 9 5 9-5M12 13v8" />
+    </>
+  ),
+  wave: (
+    <>
+      <path d="M3 12c2-5 4-5 6 0s4 5 6 0 4-5 6 0" />
+      <path d="M3 17c2-3 4-3 6 0s4 3 6 0 4-3 6 0" opacity="0.5" />
     </>
   ),
 };

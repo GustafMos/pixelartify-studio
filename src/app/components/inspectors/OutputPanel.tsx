@@ -115,7 +115,7 @@ export function OutputPanel({ node }: { node: GraphNode }): React.ReactElement {
     const input =
       image === item.source ? image : applyTrackedAlphaCuts(item, image, time, trackedMasks);
     return {
-      result: renderPixelArt({ image: input, masks: item.masks, settings }, { upscale: true }),
+      result: renderPixelArt({ image: input, masks: item.masks, settings }, { upscale: true, time }),
       settings,
     };
   };

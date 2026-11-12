@@ -31,6 +31,7 @@ export const TYPE_ICON: Record<GraphNodeType, IconName> = {
   compose: 'layers',
   background: 'background',
   object3d: 'cube',
+  animate: 'wave',
   postprocess: 'settings',
   merge: 'link',
   router: 'link',
@@ -110,6 +111,10 @@ function summaryFor(node: GraphNode, assetCount: number): string {
     }
     case 'object3d': {
       return `${String(p.primitive ?? 'cube')} · ${Number(p.rotationY ?? 0)}°`;
+    }
+    case 'animate': {
+      const wrap = String(p.wrap ?? 'horizontal');
+      return `${Number(p.duration ?? 4).toFixed(1)}s · ${Number(p.fps ?? 24)} fps · ${wrap}`;
     }
     case 'postprocess': {
       const post = p.postprocess as { ops?: unknown[] } | undefined;
@@ -582,7 +587,13 @@ export function GraphCanvas(): React.ReactElement {
   }, [addSearch]);
 
   const edgeColor = (type: string): string =>
-    type === 'mask' ? '#06d6a0' : type === 'palette' ? '#e879f9' : '#4cc9f0';
+    type === 'mask'
+      ? '#06d6a0'
+      : type === 'palette'
+        ? '#e879f9'
+        : type === 'motion'
+          ? '#22d3ee'
+          : '#4cc9f0';
 
   return (
     <div className="graph-shell">

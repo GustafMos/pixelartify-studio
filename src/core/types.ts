@@ -317,6 +317,7 @@ export type GraphNodeType =
   | 'compose'
   | 'background'
   | 'object3d'
+  | 'animate'
   | 'postprocess'
   | 'merge'
   | 'router'

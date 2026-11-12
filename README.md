@@ -26,7 +26,7 @@ PixelArtify Studio turns drawings, photos and videos into deliberate pixel art. 
 - **Resolution independence by construction** — all radii, dither matrices and effect sizes are measured in art pixels. The engine supersamples to a canonical working resolution derived from the art size, never from the source.
 - **Palette Studio** — extraction (median cut + OKLab k-means), Adobe Color–style harmony wheel, shades/tints, WCAG contrast checks and colour-blindness simulation. Import/export GPL, JASC-PAL, Paint.NET/Lospec `.hex`, plain hex and JSON.
 - **28 dithering algorithms** — Bayer 2/4/8/16, blue noise (void-and-cluster), clustered dot, line, checker, dot, crosshatch, white noise, Floyd–Steinberg, Atkinson, Jarvis, Stucki, Burkes, Sierra, Two-row Sierra, Sierra Lite, Shiau–Fan, Simple 2D, Riemersma, and a Yliluoma-style palette blend.
-- **10 pre-processing effects** — Kuwahara painterly, oil paint, watercolour, posterize, fractal noise displacement, grain, soften, sharpen, bloom and chunky blur. The Color Correct node is also available as a pre-process op.
+- **10 pre-processing effects** — Kuwahara painterly, oil paint, watercolour, posterize, fractal noise displacement, grain, soften, sharpen, bloom and chunky blur. Grain and noise displacement can be set to animate over time. The Color Correct node is also available as a pre-process op.
 - **8 post-processing effects** — sprite outline, bloom, grain, scanlines, vignette, chromatic aberration, CRT and final sharpen.
 - **Crop, resize and channels** — nearest/bilinear/box/bicubic/Lanczos3 resampling, alpha-safe; channel extract/swap/pack, luma↔alpha and HSL→RGB channel encoding.
 - **Layer extraction and inpainting** — saliency, subject box/ellipse, chroma key, luma, edge and manual masks. **Magic select** paints positive/negative strokes and grows an edge-aware subject mask; on video, **Apply & track** follows the subject and caches per-frame masks. Background layers inpaint occluded regions with directional/mirrored fill, diffusion or dithered regeneration. Separate occlusion masks keep foregrounds tight while removing legs and shadows from the background.
@@ -61,7 +61,7 @@ Open <http://localhost:5173>. Everything runs locally. Drop images or videos ont
 
 ```bash
 npm run build      # typecheck + production build
-npm run test       # 42 core tests
+npm run test       # 45 core tests
 npm run cli -- --help
 npm run build:cli  # bundle the headless CLI
 ```
@@ -89,10 +89,13 @@ The studio targets modern Chromium/Firefox/Safari. Video decoding/encoding uses 
 | **Compose layers** | Layer stack with visibility, opacity, blend, offsets, scaling, detail high-pass, masks, occlusion masks and inpainting settings. |
 | **Background** | Generated solid colour, linear/radial gradient, checkerboard, stripes, grid, dots or noise. Connect media to place it behind the image; leave unconnected for a standalone background. |
 | **3D object** | Cube, sphere, cylinder, cone, torus or pyramid with an orthographic camera. Rotate on X/Y/Z, move on X/Y/Z, scale, zoom and light it. Connect media to composite the object on top; the generated background option applies when standalone. |
+| **Animate** | Motion input for 3D objects and Background. Formula fields for translate X/Y/Z, rotate X/Y/Z and scale, with `t`, `frame`, `lt`, math functions and a wrap/leave-frame choice. A time timeline appears in the viewer whenever the graph contains an Animate node. |
 | **Post-process** | Outline, bloom, grain, scanlines, vignette, chromatic aberration, CRT, sharpen. |
 | **Merge** | Concatenate multiple media bundles into one batch. |
 | **Router** | Pure pass-through reroute for media, masks and palettes. Keeps branches intact when replacing or deleting a node. |
 | **Output** | PNG/WebP, layer ZIP, batch ZIP, video, spritesheet or both. Multiple outputs render independent variants. |
+
+**Animation:** add an **Animate** node and connect its **Motion** output to a **3D object** or **Background** motion input. Formulas are evaluated per frame with `t` (seconds), `frame`, `lt` (loop time) and functions such as `sin`, `cos`, `clamp` and `smoothstep`. Set **When it leaves the frame** to wrap horizontally, wrap both axes, or let the object leave. A timeline with play/pause, scrubbing and fps appears under the viewer whenever the graph has an Animate node.
 
 **Connecting:** drag from an output dot to anywhere on an input port row, or click an output then click an input. The **Connections** panel in the inspector is a keyboard-friendly fallback for adding and removing connections. Drag from an input to an output too — both directions work.
 

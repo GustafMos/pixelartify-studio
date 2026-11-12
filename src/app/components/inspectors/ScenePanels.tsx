@@ -10,14 +10,21 @@ import {
   PRIMITIVES_3D,
   type Render3DParams,
 } from '../../../core/render3d';
+import {
+  DEFAULT_MOTION,
+  evaluateMotion,
+  type MotionSettings,
+} from '../../../core/motion';
 import { useStudio } from '../../store';
 import { Icon } from '../icons';
 import {
   Badge,
   ColorField,
+  NumberField,
   Section,
   SelectField,
   Slider,
+  TextField,
   Toggle,
 } from '../controls';
 
@@ -188,6 +195,163 @@ export function BackgroundPanel({ node }: { node: GraphNode }): React.ReactEleme
           {connected
             ? 'The background matches the connected media size and is applied behind it. Transparent areas of the source show the generated background.'
             : 'Connect a Media input to place this behind an image or video, or leave it standalone and pipe it into Pixelate, Palette and Dither.'}
+        </span>
+      </div>
+    </div>
+  );
+}
+
+const MOTION_PRESETS: Array<{ name: string; patch: Partial<MotionSettings> }> = [
+  {
+    name: 'Spin',
+    patch: { rotationX: 'sin(t * 1.5) * 12', rotationY: 't * 60', rotationZ: '0' },
+  },
+  {
+    name: 'Float',
+    patch: { x: '0', y: 'sin(t * 1.6) * 0.18', rotationX: 'sin(t) * 10', rotationY: 't * 15' },
+  },
+  {
+    name: 'Drift & wrap',
+    patch: { x: 't * 0.5', y: 'sin(t * 2) * 0.06', wrap: 'horizontal', loop: false },
+  },
+  {
+    name: 'Pulse',
+    patch: { scale: '1 + sin(t * 3) * 0.12' },
+  },
+];
+
+export function AnimatePanel({ node }: { node: GraphNode }): React.ReactElement {
+  const { updateNodeParams, animationTime } = useStudio();
+  const p: MotionSettings = { ...DEFAULT_MOTION, ...(node.params as Partial<MotionSettings>) };
+  const set = (patch: Partial<MotionSettings>): void => updateNodeParams(node.id, patch);
+  const sample = evaluateMotion(p, animationTime);
+  const frameCount = Math.max(1, Math.round(p.duration * p.fps));
+
+  return (
+    <div className="inspector-panel">
+      <Section
+        title="Continuous motion"
+        subtitle="Connect Motion to a 3D object or Background. Formulas run every animation frame."
+      >
+        <div className="two-col">
+          <NumberField
+            label="Duration"
+            value={p.duration}
+            min={0.1}
+            step={0.1}
+            unit="s"
+            hint="Timeline length. Used when Loop is enabled."
+            onChange={(duration) => set({ duration })}
+          />
+          <NumberField
+            label="Frame rate"
+            value={p.fps}
+            min={1}
+            step={1}
+            unit="fps"
+            hint="Timeline preview and frame-based formulas."
+            onChange={(fps) => set({ fps })}
+          />
+        </div>
+        <Toggle
+          label={`Loop (${frameCount} frames)`}
+          checked={p.loop}
+          hint="Restart at t = 0 after Duration. Leave off for continuous, ever-increasing motion."
+          onChange={(loop) => set({ loop })}
+        />
+        <SelectField
+          label="When it leaves the frame"
+          value={p.wrap}
+          options={[
+            { value: 'horizontal', label: 'Wrap left/right' },
+            { value: 'both', label: 'Wrap both axes' },
+            { value: 'none', label: 'Leave the frame' },
+          ]}
+          onChange={(wrap) => set({ wrap })}
+        />
+        {p.wrap !== 'none' ? (
+          <Slider
+            label="Wrap width"
+            value={p.wrapWidth}
+            min={0.5}
+            max={8}
+            step={0.1}
+            hint="Half-frame units. 2.0 wraps exactly at the left and right frame edges."
+            onChange={(wrapWidth) => set({ wrapWidth })}
+          />
+        ) : null}
+        <div className="motion-presets">
+          {MOTION_PRESETS.map((preset) => (
+            <button
+              key={preset.name}
+              type="button"
+              className="ghost-btn small"
+              onClick={() => set(preset.patch)}
+            >
+              {preset.name}
+            </button>
+          ))}
+        </div>
+        <div className="motion-readout">
+          t={sample.time.toFixed(2)}s · frame {Math.round(sample.frame)} · x {sample.x.toFixed(2)} ·
+          y {sample.y.toFixed(2)} · rotY {sample.rotationY.toFixed(1)}°
+        </div>
+      </Section>
+
+      <Section
+        title="Formulas"
+        subtitle="Variables: t, frame, lt, loopFrame, duration, fps, pi, tau. Functions: sin, cos, tan, abs, min, max, floor, ceil, round, sqrt, pow, clamp, lerp, step, smoothstep."
+      >
+        <TextField
+          label="Translate X"
+          value={p.x}
+          hint="World units. Use t * 0.5 for a constant drift, or sin(t * 2) * 0.4 to oscillate."
+          onChange={(x) => set({ x })}
+        />
+        <TextField
+          label="Translate Y"
+          value={p.y}
+          hint="Positive values move up. Use sin(t * 1.5) * 0.2 to float."
+          onChange={(y) => set({ y })}
+        />
+        <TextField
+          label="Translate Z"
+          value={p.z}
+          hint="Depth offset for 3D objects."
+          onChange={(z) => set({ z })}
+        />
+        <TextField
+          label="Rotate X"
+          value={p.rotationX}
+          hint="Degrees. sin(t) * 15 gives a gentle tilt."
+          onChange={(rotationX) => set({ rotationX })}
+        />
+        <TextField
+          label="Rotate Y"
+          value={p.rotationY}
+          hint="Degrees. t * 60 spins once every six seconds."
+          onChange={(rotationY) => set({ rotationY })}
+        />
+        <TextField
+          label="Rotate Z"
+          value={p.rotationZ}
+          hint="Degrees. Also rotates Background patterns."
+          onChange={(rotationZ) => set({ rotationZ })}
+        />
+        <TextField
+          label="Scale"
+          value={p.scale}
+          hint="1 = original. 1 + sin(t * 3) * 0.12 pulses."
+          onChange={(scale) => set({ scale })}
+        />
+      </Section>
+
+      <div className="info-callout">
+        <Icon name="wave" size={16} />
+        <span>
+          Enable <strong>Animate</strong> on Film grain or Noise displacement in the Pre-process or
+          Post-process inspector to make the texture move too. The viewer timeline appears whenever
+          this graph contains an Animate node.
         </span>
       </div>
     </div>

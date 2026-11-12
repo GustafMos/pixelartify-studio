@@ -129,6 +129,8 @@ export interface RenderOptions {
   pixelator?: Pixelator;
   /** Reuse a previously resolved palette (used for smooth video playback). */
   paletteOverride?: string[];
+  /** Animation time in seconds, used by animated grain/noise effects. */
+  time?: number;
 }
 
 export function renderPixelArt(
@@ -144,7 +146,12 @@ export function renderPixelArt(
   const working = pixelationEnabled
     ? computeWorkingSize(size.width, size.height, options.maxWorkingSide ?? 2048)
     : { width: image.width, height: image.height, supersample: 1 };
-  const ctx: EffectContext = { artWidth: size.width, artHeight: size.height, seed: options.seed ?? 0 };
+  const ctx: EffectContext = {
+    artWidth: size.width,
+    artHeight: size.height,
+    seed: options.seed ?? 0,
+    time: options.time ?? 0,
+  };
 
   const finalize = (
     img: PixelImage,
@@ -364,6 +371,7 @@ export function renderPixelArt(
       artWidth: size.width,
       artHeight: size.height,
       seed: options.seed ?? 0,
+      time: options.time ?? 0,
     });
     if (settings.postprocess.lockPalette && palette.length > 0) {
       snapToPalette(art, palette, paletteSettings.colorSpace, 1);

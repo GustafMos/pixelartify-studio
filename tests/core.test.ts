@@ -11,6 +11,10 @@ import {
   applyDither,
   buildMagicMask,
   computeArtSize,
+  createPreprocessOp,
+  DEFAULT_MOTION,
+  evaluateExpression,
+  evaluateMotion,
   computeWorkingSize,
   createImage,
   createPaletteMatcher,
@@ -879,6 +883,78 @@ describe('generated backgrounds and 3D primitives', () => {
     const composited = applyTrackedAlphaCuts(item, frame, 0, undefined);
     expect(pixel(composited, 2, 2)).toEqual([255, 0, 0, 255]);
     expect(pixel(composited, 20, 2)).toEqual([0, 0, 255, 255]);
+  });
+});
+
+describe('animation', () => {
+  it('evaluates formulas and wraps translations', () => {
+    expect(evaluateExpression('sin(pi / 2)', {})).toBeCloseTo(1);
+    expect(evaluateExpression('frame + 2', { frame: 5 })).toBe(7);
+    expect(evaluateExpression('clamp(9, 0, 4)', {})).toBe(4);
+    expect(evaluateExpression('missing + 1', {})).toBe(1);
+
+    const drift = evaluateMotion(
+      { ...DEFAULT_MOTION, x: 't * 0.5', y: 'sin(t) * 0.1', rotationY: 't * 60', wrap: 'none' },
+      2,
+    );
+    expect(drift.x).toBeCloseTo(1);
+    expect(drift.rotationY).toBeCloseTo(120);
+    expect(drift.y).toBeCloseTo(Math.sin(2) * 0.1);
+
+    const wrapped = evaluateMotion(
+      { ...DEFAULT_MOTION, x: 't * 1.3', wrap: 'horizontal', wrapWidth: 2.4 },
+      2,
+    );
+    expect(wrapped.x).toBeCloseTo(0.2);
+  });
+
+  it('animates a generated 3D scene over time', () => {
+    const s = defaultSettings();
+    const background = createNode('background', 0, 0, { mode: 'solid', colorA: '#111827', width: 64, height: 64 }, s);
+    const object = createNode('object3d', 200, 0, {
+      primitive: 'cube',
+      width: 64,
+      height: 64,
+      antiAlias: 0,
+    }, s);
+    const animate = createNode('animate', 400, 0, {
+      ...DEFAULT_MOTION,
+      y: 'sin(t * 2) * 0.3',
+      rotationY: 't * 90',
+    }, s);
+    let graph = {
+      id: 'g',
+      name: 'animated',
+      description: '',
+      nodes: [background, object, animate],
+      edges: [],
+    } as PipelineGraph;
+    graph = connect(graph, background.id, 'media', object.id, 'media');
+    graph = connect(graph, animate.id, 'motion', object.id, 'motion');
+    const sample = (time: number): number[] => {
+      const evaluation = evaluateGraph(graph, { assetsByNode: {}, time });
+      const item = mediaAtPort(evaluation, object.id)[0];
+      return [...item.source.data];
+    };
+    const first = sample(0);
+    const second = sample(0.5);
+    expect(second).not.toEqual(first);
+  });
+
+  it('animates film grain and noise displacement', () => {
+    const render = (type: 'grain' | 'displace', time: number): Uint8ClampedArray => {
+      const settings = defaultSettings();
+      settings.resolution = { ...settings.resolution, mode: 'short-side', value: 32 };
+      settings.palette = { ...DEFAULT_PALETTE, mode: 'none' };
+      settings.dither = { ...DEFAULT_DITHER, algorithm: 'none' };
+      const op = createPreprocessOp(type);
+      op.params = { ...op.params, animated: 1, amount: 0.5, seed: 3 };
+      settings.preprocess = { ops: [op] };
+      const result = renderPixelArt({ image: gradient(64, 64), settings }, { time });
+      return result.artAtPixelScale.data;
+    };
+    expect(render('grain', 1)).not.toEqual(render('grain', 0.1));
+    expect(render('displace', 1)).not.toEqual(render('displace', 0.1));
   });
 });
 

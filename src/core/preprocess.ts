@@ -35,6 +35,8 @@ export interface EffectParamDef {
   default: number;
   unit?: string;
   hint?: string;
+  /** Renders as a checkbox instead of a slider. Values stay 0/1. */
+  kind?: 'slider' | 'toggle';
 }
 
 export interface EffectDefinition<T extends string> {
@@ -137,6 +139,16 @@ export const PREPROCESS_DEFS: EffectDefinition<PreprocessType>[] = [
       { key: 'octaves', label: 'Octaves', min: 1, max: 6, step: 1, default: 3 },
       { key: 'seed', label: 'Seed', min: 0, max: 9999, step: 1, default: 0 },
       { key: 'chromatic', label: 'Chromatic split', min: 0, max: 1, step: 0.01, default: 0 },
+      {
+        key: 'animated',
+        label: 'Animate',
+        min: 0,
+        max: 1,
+        step: 1,
+        default: 0,
+        kind: 'toggle',
+        hint: 'Flow the noise field over time during playback and animation preview.',
+      },
     ],
     credits: ['Fractal value noise after Perlin (1985) and Musgrave'],
   },
@@ -150,6 +162,16 @@ export const PREPROCESS_DEFS: EffectDefinition<PreprocessType>[] = [
       { key: 'scale', label: 'Grain size', min: 0.5, max: 8, step: 0.5, default: 1, unit: 'art px' },
       { key: 'monochrome', label: 'Monochrome', min: 0, max: 1, step: 1, default: 1 },
       { key: 'seed', label: 'Seed', min: 0, max: 9999, step: 1, default: 7 },
+      {
+        key: 'animated',
+        label: 'Animate',
+        min: 0,
+        max: 1,
+        step: 1,
+        default: 0,
+        kind: 'toggle',
+        hint: 'Refresh the grain field over time during playback and animation preview.',
+      },
     ],
   },
   {
@@ -236,6 +258,16 @@ export const POSTPROCESS_DEFS: EffectDefinition<PostprocessType>[] = [
       { key: 'scale', label: 'Grain size', min: 0.5, max: 6, step: 0.5, default: 1, unit: 'art px' },
       { key: 'monochrome', label: 'Monochrome', min: 0, max: 1, step: 1, default: 1 },
       { key: 'seed', label: 'Seed', min: 0, max: 9999, step: 1, default: 21 },
+      {
+        key: 'animated',
+        label: 'Animate',
+        min: 0,
+        max: 1,
+        step: 1,
+        default: 0,
+        kind: 'toggle',
+        hint: 'Refresh the grain field over time during playback and animation preview.',
+      },
     ],
   },
   {
@@ -335,6 +367,8 @@ export interface EffectContext {
   artHeight: number;
   /** Deterministic seed for this render. */
   seed?: number;
+  /** Animation time in seconds for animated grain/displacement. */
+  time?: number;
 }
 
 /** Subset shared by pre/post operations that a GPU backend can consume. */
@@ -679,14 +713,16 @@ function displace(img: PixelImage, op: PreprocessOp, ctx: EffectContext): PixelI
   const octaves = clamp(Math.round(op.params.octaves ?? 3), 1, 6);
   const seed = Math.round(op.params.seed ?? 0);
   const chromatic = clamp01(op.params.chromatic ?? 0);
+  const animated = (op.params.animated ?? 0) > 0.5;
+  const flow = animated ? (ctx.time ?? 0) * 0.55 : 0;
   const out = createImage(img.width, img.height);
   const w = img.width;
   const h = img.height;
 
   for (let y = 0; y < h; y++) {
     for (let x = 0; x < w; x++) {
-      const nx = x / feature;
-      const ny = y / feature;
+      const nx = x / feature + flow;
+      const ny = y / feature - flow * 0.4;
       const dx = (fbm2D(nx, ny, { octaves, seed: seed + 11 }) - 0.5) * 2 * amplitude;
       const dy = (fbm2D(nx, ny, { octaves, seed: seed + 37 }) - 0.5) * 2 * amplitude;
       const sample = sampleBilinear(img, x + dx, y + dy);
@@ -711,7 +747,9 @@ function grain(img: PixelImage, op: EffectOpFields, ctx: EffectContext): PixelIm
   const amount = clamp01(op.params.amount ?? 0.12) * 255;
   const size = Math.max(0.5, (op.params.scale ?? 1) * scale);
   const mono = (op.params.monochrome ?? 1) > 0.5;
-  const seed = Math.round(op.params.seed ?? 7);
+  const animated = (op.params.animated ?? 0) > 0.5;
+  const frame = animated ? Math.floor((ctx.time ?? 0) * 24) : 0;
+  const seed = Math.round(op.params.seed ?? 7) + frame * 101;
   const out = cloneImage(img);
   const d = out.data;
   for (let y = 0; y < out.height; y++) {

@@ -105,6 +105,8 @@ export function renderBackground(
   const spanX = Math.abs(w * cos) + Math.abs(h * sin);
   const cx = w * (0.5 + Math.max(-1, Math.min(1, p.offsetX || 0)) * 0.5);
   const cy = h * (0.5 + Math.max(-1, Math.min(1, p.offsetY || 0)) * 0.5);
+  const shiftX = (p.offsetX || 0) * w;
+  const shiftY = (p.offsetY || 0) * h;
   const maxRadius = Math.max(1, Math.hypot(Math.max(cx, w - cx), Math.max(cy, h - cy)));
   const noiseAmount = Math.max(0, Math.min(1, p.noise ?? 0.5));
 
@@ -119,7 +121,7 @@ export function renderBackground(
         case 'solid':
           break;
         case 'linear': {
-          const u = (px - w / 2) * cos + (py - h / 2) * sin;
+          const u = (px - shiftX - w / 2) * cos + (py - shiftY - h / 2) * sin;
           const t = clamp01(0.5 + u / Math.max(1, spanX));
           rgb = mixRgb({ r: a.r, g: a.g, b: a.b }, { r: b.r, g: b.g, b: b.b }, t);
           break;
@@ -130,19 +132,20 @@ export function renderBackground(
           break;
         }
         case 'checker': {
-          const on = (Math.floor(x / scale) + Math.floor(y / scale)) % 2 === 0;
+          const on =
+            (Math.floor((x - shiftX) / scale) + Math.floor((y - shiftY) / scale)) % 2 === 0;
           if (!on) rgb = { r: b.r, g: b.g, b: b.b };
           break;
         }
         case 'stripes': {
-          const u = (x * cos + y * sin) / scale;
+          const u = ((x - shiftX) * cos + (y - shiftY) * sin) / scale;
           const on = ((Math.floor(u) % 2) + 2) % 2 === 0;
           if (!on) rgb = { r: b.r, g: b.g, b: b.b };
           break;
         }
         case 'grid': {
-          const u = (x * cos + y * sin) / scale;
-          const v = (-x * sin + y * cos) / scale;
+          const u = ((x - shiftX) * cos + (y - shiftY) * sin) / scale;
+          const v = (-(x - shiftX) * sin + (y - shiftY) * cos) / scale;
           const du = Math.abs(u - Math.round(u)) * scale;
           const dv = Math.abs(v - Math.round(v)) * scale;
           if (du <= lineWidth / 2 || dv <= lineWidth / 2) {
@@ -151,11 +154,13 @@ export function renderBackground(
           break;
         }
         case 'dots': {
-          const cellX = Math.floor(x / scale);
-          const cellY = Math.floor(y / scale);
+          const localX = px - shiftX;
+          const localY = py - shiftY;
+          const cellX = Math.floor(localX / scale);
+          const cellY = Math.floor(localY / scale);
           const ox = (cellX + 0.5) * scale;
           const oy = (cellY + 0.5) * scale;
-          const dist = Math.hypot(px - ox, py - oy);
+          const dist = Math.hypot(localX - ox, localY - oy);
           const feather = Math.max(0.5, scale * 0.06);
           if (dist <= dotRadius - feather) {
             rgb = { r: b.r, g: b.g, b: b.b };
@@ -166,8 +171,9 @@ export function renderBackground(
           break;
         }
         case 'noise': {
-          const gx = Math.floor(x / Math.max(1, Math.round(scale / 4)));
-          const gy = Math.floor(y / Math.max(1, Math.round(scale / 4)));
+          const cell = Math.max(1, Math.round(scale / 4));
+          const gx = Math.floor((x - shiftX) / cell);
+          const gy = Math.floor((y - shiftY) / cell);
           const n = hash2(gx, gy, 0x9e3779b9);
           const t = clamp01(n * noiseAmount + (1 - noiseAmount) * 0.5);
           rgb = mixRgb({ r: a.r, g: a.g, b: a.b }, { r: b.r, g: b.g, b: b.b }, t);

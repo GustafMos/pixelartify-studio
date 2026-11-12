@@ -57,8 +57,9 @@ import { DEFAULT_CHANNELS, applyChannels, type ChannelSettings } from './channel
 import { DEFAULT_COLOR_CORRECTION } from './preprocess';
 import { DEFAULT_BACKGROUND, renderBackground, type BackgroundParams } from './background';
 import { DEFAULT_OBJECT3D, renderObject3D, type Render3DParams } from './render3d';
+import { DEFAULT_MOTION, evaluateMotion, type MotionSettings } from './motion';
 
-export type SocketType = 'media' | 'mask' | 'palette';
+export type SocketType = 'media' | 'mask' | 'palette' | 'motion';
 
 export interface NodePortDef {
   id: string;
@@ -208,7 +209,10 @@ export const NODE_DEFS: Record<GraphNodeType, NodeDefinition> = {
     description:
       'Generate a solid colour, gradient or pattern. Connect media to place it behind an image or video; leave unconnected to output the background on its own.',
     accent: '#4d96ff',
-    inputs: [{ id: 'media', label: 'Media', type: 'media', optional: true }],
+    inputs: [
+      { id: 'media', label: 'Media', type: 'media', optional: true },
+      { id: 'motion', label: 'Motion', type: 'motion', optional: true },
+    ],
     outputs: [{ id: 'media', label: 'Media', type: 'media' }],
   },
   object3d: {
@@ -218,8 +222,21 @@ export const NODE_DEFS: Record<GraphNodeType, NodeDefinition> = {
     description:
       'Render a cube, sphere, cylinder, cone, torus or pyramid with an orthographic camera. Rotate, move and light it; connect media to composite the object on top.',
     accent: '#f8961e',
-    inputs: [{ id: 'media', label: 'Media', type: 'media', optional: true }],
+    inputs: [
+      { id: 'media', label: 'Media', type: 'media', optional: true },
+      { id: 'motion', label: 'Motion', type: 'motion', optional: true },
+    ],
     outputs: [{ id: 'media', label: 'Media', type: 'media' }],
+  },
+  animate: {
+    type: 'animate',
+    title: 'Animate',
+    category: 'source',
+    description:
+      'Formula-driven continuous motion for 3D objects and backgrounds. Use t, frame and math functions such as sin, cos and clamp. Choose whether translations wrap around the frame or leave it.',
+    accent: '#22d3ee',
+    inputs: [],
+    outputs: [{ id: 'motion', label: 'Motion', type: 'motion' }],
   },
   postprocess: {
     type: 'postprocess',
@@ -341,7 +358,8 @@ export interface GraphPaletteItem {
 export type GraphValue =
   | { type: 'media'; items: GraphMediaItem[] }
   | { type: 'mask'; items: GraphMaskItem[] }
-  | { type: 'palette'; items: GraphPaletteItem[] };
+  | { type: 'palette'; items: GraphPaletteItem[] }
+  | { type: 'motion'; settings: MotionSettings };
 
 export interface GraphError {
   nodeId?: string;
@@ -361,6 +379,10 @@ export interface EvaluateOptions {
   maskCache?: Map<string, MaskData>;
   /** Painted mask overrides keyed by `${nodeId}:${assetId}:${maskId}`. */
   maskOverrides?: Record<string, MaskData>;
+  /** Animation time in seconds for Animate nodes and motion inputs. */
+  time?: number;
+  /** Cap generated background/3D source dimensions during fast preview. */
+  maxGeneratedSide?: number;
 }
 
 /* -------------------------------------------------------------------------- */
@@ -408,6 +430,8 @@ export function nodeParams(type: GraphNodeType, settings?: PixelArtifySettings):
       return { ...deepClone(DEFAULT_BACKGROUND) };
     case 'object3d':
       return { ...deepClone(DEFAULT_OBJECT3D) };
+    case 'animate':
+      return { ...deepClone(DEFAULT_MOTION) };
     case 'postprocess':
       return { postprocess: deepClone(s.postprocess) };
     case 'merge':
@@ -705,6 +729,11 @@ function evaluateNode(
   options: EvaluateOptions,
 ): Record<string, GraphValue> | null {
   const media = firstMedia(inputs, 'media');
+  const motionInput = inputs.get('motion')?.[0];
+  const motion =
+    motionInput?.type === 'motion'
+      ? evaluateMotion(motionInput.settings, options.time ?? 0)
+      : null;
   if (node.bypassed) {
     return bypassOutputs(inputs);
   }
@@ -930,15 +959,42 @@ function evaluateNode(
         },
       };
     }
+    case 'animate': {
+      return {
+        motion: {
+          type: 'motion',
+          settings: {
+            ...deepClone(DEFAULT_MOTION),
+            ...(node.params as Partial<MotionSettings>),
+          },
+        },
+      };
+    }
     case 'background': {
       const params: BackgroundParams = {
         ...deepClone(DEFAULT_BACKGROUND),
         ...(node.params as Partial<BackgroundParams>),
       };
+      if (motion) {
+        params.angle += motion.rotationZ;
+        params.offsetX += motion.x * 0.5;
+        params.offsetY += motion.y * 0.5;
+      }
       if (!media) {
-        const image = renderBackground(params.width, params.height, params);
+        let width = params.width;
+        let height = params.height;
+        const cap = options.maxGeneratedSide;
+        if (cap && Math.max(width, height) > cap) {
+          const scale = cap / Math.max(width, height);
+          width = Math.max(2, Math.round(width * scale));
+          height = Math.max(2, Math.round(height * scale));
+        }
+        const image = renderBackground(width, height, params);
         return {
-          media: { type: 'media', items: [makeGeneratedItem(node, image, 'Background')] },
+          media: {
+            type: 'media',
+            items: [makeGeneratedItem(node, image, 'Background', options.time ?? 0)],
+          },
         };
       }
       return {
@@ -961,10 +1017,36 @@ function evaluateNode(
         ...deepClone(DEFAULT_OBJECT3D),
         ...(node.params as Partial<Render3DParams>),
       };
+      if (motion) {
+        const sample = media?.items[0];
+        const aspect = sample
+          ? sample.sourceWidth / Math.max(1, sample.sourceHeight)
+          : params.width / Math.max(1, params.height);
+        params.rotationX += motion.rotationX;
+        params.rotationY += motion.rotationY;
+        params.rotationZ += motion.rotationZ;
+        // Motion x/y are in half-frame units. The renderer scales position by
+        // viewH * 1.4, so divide by 2.8 to make x=1 reach the frame edge.
+        params.positionX += motion.x * (aspect / 2.8);
+        params.positionY += motion.y / 2.8;
+        params.positionZ += motion.z;
+        params.scale *= motion.scale;
+      }
       if (!media) {
-        const image = renderObject3D(params.width, params.height, params);
+        let width = params.width;
+        let height = params.height;
+        const cap = options.maxGeneratedSide;
+        if (cap && Math.max(width, height) > cap) {
+          const scale = cap / Math.max(width, height);
+          width = Math.max(2, Math.round(width * scale));
+          height = Math.max(2, Math.round(height * scale));
+        }
+        const image = renderObject3D(width, height, params);
         return {
-          media: { type: 'media', items: [makeGeneratedItem(node, image, '3D object')] },
+          media: {
+            type: 'media',
+            items: [makeGeneratedItem(node, image, '3D object', options.time ?? 0)],
+          },
         };
       }
       return {
@@ -973,10 +1055,21 @@ function evaluateNode(
           items: media.items.map((item) => {
             // With an input the object is an overlay, so a solid background
             // would hide the source. The Background node handles backdrops.
-            const object = renderObject3D(item.sourceWidth, item.sourceHeight, {
+            let width = item.sourceWidth;
+            let height = item.sourceHeight;
+            const cap = options.maxGeneratedSide;
+            if (cap && Math.max(width, height) > cap) {
+              const scale = cap / Math.max(width, height);
+              width = Math.max(2, Math.round(width * scale));
+              height = Math.max(2, Math.round(height * scale));
+            }
+            let object = renderObject3D(width, height, {
               ...params,
               background: 'transparent',
             });
+            if (width !== item.sourceWidth || height !== item.sourceHeight) {
+              object = resizeImage(object, item.sourceWidth, item.sourceHeight, 'nearest');
+            }
             const overlay = item.overlay ? compositeOver(item.overlay, object) : object;
             return {
               ...item,
@@ -1263,9 +1356,14 @@ function hashParams(value: unknown): string {
 }
 
 /** Wrap an image produced by a generator node (background, 3D object). */
-function makeGeneratedItem(node: GraphNode, image: PixelImage, name: string): GraphMediaItem {
+function makeGeneratedItem(
+  node: GraphNode,
+  image: PixelImage,
+  name: string,
+  time = 0,
+): GraphMediaItem {
   const s = defaultSettings();
-  const version = hashParams(node.params);
+  const version = `${hashParams(node.params)}-${hashParams(time)}`;
   const assetId = `generated:${node.id}:${version}`;
   return {
     key: `${node.id}:${version}`,
@@ -1385,6 +1483,7 @@ export function stopStageForNode(type: GraphNodeType): 'source' | 'preprocess' |
     case 'input':
     case 'background':
     case 'object3d':
+    case 'animate':
       return 'source';
     case 'preprocess':
     case 'color':
