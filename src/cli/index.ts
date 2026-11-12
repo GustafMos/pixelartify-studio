@@ -72,7 +72,7 @@ Output:
       --no-manifest          Skip the JSON manifest
       --overwrite            Overwrite existing files
 
-Video (requires the bundled ffmpeg):
+Video (requires ffmpeg; bundled optional install or FFMPEG_PATH):
       --video-output <m>     video | spritesheet | both
       --fps <n>              Output frame rate (default 24)
       --start <s>            Start time in seconds
@@ -368,6 +368,10 @@ async function processImage(file: string, outDir: string, options: Options, pres
       ext: settings.output.format,
     });
     const target = join(outDir, name);
+    if (existsSync(target) && !options.overwrite) {
+      console.log(`  skip existing ${target} (use --overwrite)`);
+      continue;
+    }
     if (options['dry-run']) {
       console.log(`  would write ${target} (${out.result.size.exportWidth}x${out.result.size.exportHeight})`);
       written++;

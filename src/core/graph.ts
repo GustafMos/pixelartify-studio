@@ -735,7 +735,10 @@ function evaluateNode(
     }
     case 'extract': {
       if (!media) return null;
-      const extraction = (node.params.extraction as ExtractionSettings) ?? deepClone(DEFAULT_EXTRACTION);
+      const extraction: ExtractionSettings = {
+        ...deepClone(DEFAULT_EXTRACTION),
+        ...(node.params.extraction as Partial<ExtractionSettings> | undefined),
+      };
       const maskId = String(node.params.maskId ?? 'subject');
       if (!extraction.enabled) {
         return { media, mask: { type: 'mask', items: [] } };

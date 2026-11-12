@@ -49,7 +49,10 @@ export function ExtractPanel({ node }: { node: GraphNode }): React.ReactElement 
     maskOverrides,
     videoFrame,
   } = useStudio();
-  const extraction = (node.params.extraction as ExtractionSettings | undefined) ?? { ...DEFAULT_EXTRACTION };
+  const extraction: ExtractionSettings = {
+    ...DEFAULT_EXTRACTION,
+    ...((node.params.extraction as Partial<ExtractionSettings> | undefined) ?? {}),
+  };
   const maskId = String(node.params.maskId ?? 'subject');
   const maskKey = activeAsset ? `${node.id}:${activeAsset.id}:${maskId}` : '';
   const override = maskKey ? maskOverrides[maskKey] : undefined;
