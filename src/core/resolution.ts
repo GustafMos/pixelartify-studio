@@ -25,6 +25,18 @@ export function computeArtSize(
 ): ArtSize {
   const sw = Math.max(1, sourceWidth);
   const sh = Math.max(1, sourceHeight);
+
+  if (resolution.mode === 'native') {
+    const pixelScale = clamp(Math.round(resolution.exportScale || 1), 1, 16);
+    return {
+      width: sw,
+      height: sh,
+      exportWidth: sw * pixelScale,
+      exportHeight: sh * pixelScale,
+      pixelScale,
+    };
+  }
+
   let artW = sw;
   let artH = sh;
 

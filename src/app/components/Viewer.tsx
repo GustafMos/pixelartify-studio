@@ -6,7 +6,7 @@ import { pixelImageToDataUrl } from '../io';
 import { Icon } from './icons';
 import { Badge, IconButton, Segmented, Slider, Spinner } from './controls';
 
-export function Viewer(): React.ReactElement {
+export function Viewer({ resizeKey }: { resizeKey?: number | string } = {}): React.ReactElement {
   const {
     preview,
     previewError,
@@ -43,36 +43,59 @@ export function Viewer(): React.ReactElement {
   const [compare, setCompare] = useState(false);
   const [comparePos, setComparePos] = useState(50);
   const [cursor, setCursor] = useState<{ x: number; y: number } | null>(null);
-  const [fitZoom, setFitZoom] = useState(true);
+  const [autoFit, setAutoFit] = useState(true);
   const [panning, setPanning] = useState(false);
+  const [compareDragging, setCompareDragging] = useState(false);
 
   const art = preview?.art ?? null;
   const artW = art?.width ?? 1;
   const artH = art?.height ?? 1;
   const artUrl = useMemo(() => (art ? pixelImageToDataUrl(art) : null), [art]);
 
-  const fit = useCallback(() => {
-    const el = viewportRef.current;
-    if (!el || !art) return;
-    const s = Math.min((el.clientWidth - 80) / art.width, (el.clientHeight - 80) / art.height);
-    setScale(Math.max(0.25, Math.min(24, s)));
-    setPan({ x: 0, y: 0 });
-    setFitZoom(true);
-  }, [art]);
+  const fit = useCallback(
+    (size?: { width: number; height: number }) => {
+      const el = viewportRef.current;
+      if (!el || !art) return;
+      const padding = 24;
+      const width = size?.width ?? el.clientWidth;
+      const height = size?.height ?? el.clientHeight;
+      const availableW = Math.max(24, width - padding * 2);
+      const availableH = Math.max(24, height - padding * 2);
+      const s = Math.min(availableW / art.width, availableH / art.height);
+      setScale(Math.max(0.1, Math.min(24, s)));
+      setPan({ x: 0, y: 0 });
+    },
+    [art],
+  );
 
+  const fitNow = useCallback(() => {
+    setAutoFit(true);
+    fit();
+  }, [fit]);
+
+  // Refit whenever the art changes or the viewer pane is resized (tabs, split
+  // divider, window resize) while auto-fit is enabled.
   useEffect(() => {
-    if (fitZoom) fit();
-  }, [fit, fitZoom, art?.width, art?.height]);
+    if (!autoFit) return;
+    fit();
+  }, [autoFit, fit, art?.width, art?.height, resizeKey]);
 
   useEffect(() => {
     const el = viewportRef.current;
     if (!el || typeof ResizeObserver === 'undefined') return;
     const observer = new ResizeObserver(() => {
-      if (fitZoom) fit();
+      if (autoFit) fit();
     });
     observer.observe(el);
     return () => observer.disconnect();
-  }, [fit, fitZoom]);
+  }, [autoFit, fit]);
+
+  useEffect(() => {
+    if (!autoFit) return;
+    const onResize = (): void => fit();
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, [autoFit, fit]);
 
   useEffect(() => {
     const el = viewportRef.current;
@@ -80,7 +103,7 @@ export function Viewer(): React.ReactElement {
     const onWheel = (e: WheelEvent): void => {
       if (maskEdit) return;
       e.preventDefault();
-      setFitZoom(false);
+      setAutoFit(false);
       setScale((prev) => Math.max(0.2, Math.min(32, prev * Math.exp(-e.deltaY * 0.0015))));
     };
     el.addEventListener('wheel', onWheel, { passive: false });
@@ -111,6 +134,37 @@ export function Viewer(): React.ReactElement {
     if (activeAsset) return pixelImageToDataUrl(activeAsset.image);
     return null;
   }, [activeAsset, videoFrame]);
+
+  const setCompareFromClientX = useCallback((clientX: number) => {
+    const rect = wrapperRef.current?.getBoundingClientRect();
+    if (!rect || rect.width <= 0) return;
+    setComparePos(Math.max(0, Math.min(100, ((clientX - rect.left) / rect.width) * 100)));
+  }, []);
+
+  const startCompareDrag = useCallback(
+    (e: React.PointerEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      setCompareDragging(true);
+      setCompareFromClientX(e.clientX);
+      try {
+        (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+      } catch {
+        // Pointer capture is optional; window listeners below are the fallback.
+      }
+      const onMove = (event: PointerEvent): void => setCompareFromClientX(event.clientX);
+      const onUp = (): void => {
+        setCompareDragging(false);
+        window.removeEventListener('pointermove', onMove);
+        window.removeEventListener('pointerup', onUp);
+        window.removeEventListener('pointercancel', onUp);
+      };
+      window.addEventListener('pointermove', onMove);
+      window.addEventListener('pointerup', onUp);
+      window.addEventListener('pointercancel', onUp);
+    },
+    [setCompareFromClientX],
+  );
 
   const maskNode = maskEdit ? graph.nodes.find((n) => n.id === maskEdit.nodeId) : null;
   const maskKey = maskEdit && activeAsset ? `${maskEdit.nodeId}:${activeAsset.id}:${maskEdit.maskId}` : '';
@@ -224,10 +278,29 @@ export function Viewer(): React.ReactElement {
           ) : null}
         </div>
         <div className="viewer-toolbar-right">
-          <IconButton icon="zoomOut" label="Zoom out" onClick={() => { setFitZoom(false); setScale((s) => Math.max(0.2, s / 1.25)); }} />
+          <IconButton
+            icon="zoomOut"
+            label="Zoom out"
+            onClick={() => {
+              setAutoFit(false);
+              setScale((s) => Math.max(0.2, s / 1.25));
+            }}
+          />
           <span className="zoom-pill">{Math.round(scale * 100)}%</span>
-          <IconButton icon="zoomIn" label="Zoom in" onClick={() => { setFitZoom(false); setScale((s) => Math.min(32, s * 1.25)); }} />
-          <IconButton icon="fit" label="Fit to view" onClick={fit} />
+          <IconButton
+            icon="zoomIn"
+            label="Zoom in"
+            onClick={() => {
+              setAutoFit(false);
+              setScale((s) => Math.min(32, s * 1.25));
+            }}
+          />
+          <IconButton
+            icon="fit"
+            label="Fit preview — keep the image fitted when the pane is resized"
+            active={autoFit}
+            onClick={fitNow}
+          />
           <IconButton icon="grid" label="Toggle pixel grid" active={showGrid} onClick={() => setShowGrid((v) => !v)} />
           <IconButton icon="eye" label="Compare with source" active={compare} onClick={() => setCompare((v) => !v)} />
           <IconButton
@@ -295,7 +368,7 @@ export function Viewer(): React.ReactElement {
                 draggable={false}
                 style={{ imageRendering: 'pixelated' }}
               />
-              {compare && originalUrl ? (
+              {compare && originalUrl && !maskEdit ? (
                 <>
                   <img
                     className="compare-image"
@@ -307,14 +380,31 @@ export function Viewer(): React.ReactElement {
                   <div className="compare-line" style={{ left: `${comparePos}%` }}>
                     <span />
                   </div>
-                  <input
-                    className="compare-range"
-                    type="range"
-                    min={0}
-                    max={100}
-                    value={comparePos}
-                    onChange={(e) => setComparePos(Number(e.target.value))}
+                  <div
+                    className={`compare-drag-surface ${compareDragging ? 'is-dragging' : ''}`}
+                    role="slider"
+                    tabIndex={0}
                     aria-label="Comparison position"
+                    aria-valuemin={0}
+                    aria-valuemax={100}
+                    aria-valuenow={Math.round(comparePos)}
+                    title="Drag left/right to compare with the source"
+                    onPointerDown={startCompareDrag}
+                    onKeyDown={(e) => {
+                      if (e.key === 'ArrowLeft') {
+                        e.preventDefault();
+                        setComparePos((v) => Math.max(0, v - 2));
+                      } else if (e.key === 'ArrowRight') {
+                        e.preventDefault();
+                        setComparePos((v) => Math.min(100, v + 2));
+                      } else if (e.key === 'Home') {
+                        e.preventDefault();
+                        setComparePos(0);
+                      } else if (e.key === 'End') {
+                        e.preventDefault();
+                        setComparePos(100);
+                      }
+                    }}
                   />
                 </>
               ) : null}

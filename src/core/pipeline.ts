@@ -65,8 +65,11 @@ export function renderPixelArt(
   const { image, masks = {}, settings } = input;
   const stage = (name: string, p: number): void => options.onStage?.(name, p);
 
+  const pixelationEnabled = settings.pixelate.enabled !== false;
   const size = computeArtSize(image.width, image.height, settings.resolution);
-  const working = computeWorkingSize(size.width, size.height, options.maxWorkingSide ?? 2048);
+  const working = pixelationEnabled
+    ? computeWorkingSize(size.width, size.height, options.maxWorkingSide ?? 2048)
+    : { width: image.width, height: image.height, supersample: 1 };
   const ctx: EffectContext = { artWidth: size.width, artHeight: size.height, seed: options.seed ?? 0 };
 
   const finalize = (
@@ -105,7 +108,9 @@ export function renderPixelArt(
   };
 
   stage('Resampling', 0.05);
-  let src = resizeImage(image, working.width, working.height, 'box');
+  // With no Pixelate node, keep the source at its native resolution. Crop,
+  // resize and channel nodes have already changed the item source explicitly.
+  let src = pixelationEnabled ? resizeImage(image, working.width, working.height, 'box') : image;
 
   if (options.stopAfter === 'source') {
     return finalize(src, [], [], false);
@@ -116,18 +121,21 @@ export function renderPixelArt(
     src = applyPreprocess(src, settings.preprocess.ops, ctx);
   }
 
-  // Tone adjustments are applied at working resolution so sampling sees them.
-  applyTone(src, {
-    brightness: settings.pixelate.brightness,
-    contrast: settings.pixelate.contrast,
-    saturation: settings.pixelate.saturation,
-    gamma: settings.pixelate.gamma,
-    hueShift: settings.pixelate.hueShift,
-  });
+  if (pixelationEnabled) {
+    // Tone adjustments are part of the Pixelate node; never apply them to a
+    // bare pass-through graph.
+    applyTone(src, {
+      brightness: settings.pixelate.brightness,
+      contrast: settings.pixelate.contrast,
+      saturation: settings.pixelate.saturation,
+      gamma: settings.pixelate.gamma,
+      hueShift: settings.pixelate.hueShift,
+    });
 
-  if (settings.pixelate.preBlur > 0.01) {
-    const scale = working.width / size.width;
-    src = gaussianBlurRGBA(src, settings.pixelate.preBlur * scale);
+    if (settings.pixelate.preBlur > 0.01) {
+      const scale = working.width / size.width;
+      src = gaussianBlurRGBA(src, settings.pixelate.preBlur * scale);
+    }
   }
 
   if (options.stopAfter === 'preprocess') {
@@ -135,12 +143,16 @@ export function renderPixelArt(
   }
 
   stage('Pixelating', 0.35);
-  const visibleLayers = settings.layers.filter((l) => l.visible).sort((a, b) => a.z - b.z);
+  const visibleLayers = pixelationEnabled
+    ? settings.layers.filter((l) => l.visible).sort((a, b) => a.z - b.z)
+    : [];
   let art: PixelImage;
   const renderLayers: RenderLayer[] = [];
   let usedEdgeMap = false;
 
-  if (visibleLayers.length === 0) {
+  if (!pixelationEnabled) {
+    art = src;
+  } else if (visibleLayers.length === 0) {
     const result = pixelateImage(src, {
       artWidth: size.width,
       artHeight: size.height,

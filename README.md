@@ -59,7 +59,7 @@ Open <http://localhost:5173>. Everything runs locally. Drop images or videos ont
 
 ```bash
 npm run build      # typecheck + production build
-npm run test       # 28 core tests
+npm run test       # 29 core tests
 npm run cli -- --help
 npm run build:cli  # bundle the headless CLI
 ```
@@ -94,6 +94,10 @@ The studio targets modern Chromium/Firefox/Safari. Video decoding/encoding uses 
 **Disconnecting:** hover a wire and click the red × cut button, use the Connections panel, or double-click the wire. Deleting a node automatically bridges its upstream and downstream connections; if the node has several upstream branches, a **Router** node is inserted so the tree stays intact.
 
 The **Split** tab shows the viewer and the node graph at the same time with a draggable divider. Mouse wheel zooms the graph; drag the background to pan. `G` cycles Studio → Split → Node graph.
+
+**Only nodes that are actually in the branch affect the image.** A graph with just a Media input wired to an Output is a lossless pass-through. Add Pixelate, Palette, Dither or effect nodes when you want them; the default look is never applied implicitly.
+
+The viewer's **Fit preview** button (active by default) keeps the image fitted with a small padding whenever you resize the split divider, switch tabs or resize the window. Zooming or panning turns auto-fit off; click the fit button to re-enable it.
 
 ### Resolution independence
 

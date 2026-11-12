@@ -377,6 +377,9 @@ export function builtinPreset(id: string): Preset | undefined {
 
 export function settingsFromGraph(graph: PipelineGraph): PixelArtifySettings {
   const s = defaultSettings();
+  let hasPixelate = false;
+  let hasPalette = false;
+  let hasDither = false;
   for (const node of graph.nodes) {
     if (node.bypassed) continue;
     switch (node.type) {
@@ -384,13 +387,16 @@ export function settingsFromGraph(graph: PipelineGraph): PixelArtifySettings {
         if (Array.isArray(node.params.ops)) s.preprocess.ops = deepClone(node.params.ops);
         break;
       case 'pixelate':
+        hasPixelate = true;
         if (node.params.resolution) s.resolution = deepClone(node.params.resolution as typeof s.resolution);
         if (node.params.pixelate) s.pixelate = deepClone(node.params.pixelate as typeof s.pixelate);
         break;
       case 'palette':
+        hasPalette = true;
         if (node.params.palette) s.palette = deepClone(node.params.palette as typeof s.palette);
         break;
       case 'dither':
+        hasDither = true;
         if (node.params.dither) s.dither = deepClone(node.params.dither as typeof s.dither);
         break;
       case 'extract':
@@ -410,6 +416,23 @@ export function settingsFromGraph(graph: PipelineGraph): PixelArtifySettings {
         break;
     }
   }
+
+  if (!hasPixelate) {
+    s.pixelate.enabled = false;
+    s.pixelate.contrast = 1;
+    s.pixelate.brightness = 0;
+    s.pixelate.saturation = 1;
+    s.pixelate.gamma = 1;
+    s.pixelate.hueShift = 0;
+    s.pixelate.preBlur = 0;
+    s.pixelate.postSharpen = 0;
+    s.pixelate.alphaThreshold = 0;
+    s.resolution = { ...s.resolution, mode: 'native', exportScale: 1, snapEven: false };
+    s.layers = [];
+  }
+  if (!hasPalette) s.palette.mode = 'none';
+  if (!hasDither) s.dither.algorithm = 'none';
+
   return s;
 }
 

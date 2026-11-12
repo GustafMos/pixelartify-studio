@@ -21,6 +21,7 @@ import {
   serializePalette,
   serializePreset,
   settingsFromGraph,
+  settingsFromItem,
   threeLayerStack,
   upscaleNearest,
 } from '../src/core';
@@ -326,6 +327,24 @@ describe('nodes and graph', () => {
     const items = mediaAtPort(evaluation, output.id);
     expect(items).toHaveLength(1);
     expect(items[0].sourceWidth).toBe(100);
+  });
+
+  it('passes input to output completely unaltered when no processing nodes exist', () => {
+    const graph: PipelineGraph = { id: 'g', name: 'g', description: '', nodes: [], edges: [] };
+    const input = createNode('input', 0, 0);
+    const out = createNode('output', 200, 0);
+    graph.nodes.push(input, out);
+    graph.edges.push({ id: 'e1', fromNode: input.id, fromPort: 'media', toNode: out.id, toPort: 'media' });
+    const evaluation = evaluateGraph(graph, { assetsByNode: { [input.id]: [asset] } });
+    const item = mediaAtPort(evaluation, out.id)[0];
+    const settings = settingsFromItem(item);
+    expect(settings.pixelate.enabled).toBe(false);
+    expect(settings.dither.algorithm).toBe('none');
+    expect(settings.palette.mode).toBe('none');
+    const result = renderPixelArt({ image: item.source, settings });
+    expect(result.size.width).toBe(asset.width);
+    expect(result.size.height).toBe(asset.height);
+    expect(Array.from(result.art.data)).toEqual(Array.from(asset.image.data));
   });
 
   it('merges multiple inputs into one batch', () => {

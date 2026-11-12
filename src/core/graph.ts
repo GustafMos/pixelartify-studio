@@ -266,6 +266,12 @@ export interface GraphMediaItem {
   postprocess: PostprocessSettings;
   resolution: ResolutionSettings;
   pixelate: PixelateSettings;
+  /** True only if a Pixelate node is present in this branch. */
+  pixelateEnabled: boolean;
+  /** True only if a Palette node is present in this branch. */
+  paletteEnabled: boolean;
+  /** True only if a Dither node is present in this branch. */
+  ditherEnabled: boolean;
   palette: PaletteSettings;
   dither: DitherSettings;
   output: OutputSettings;
@@ -713,6 +719,7 @@ function evaluateNode(
             ...item,
             resolution: deepClone(resolution),
             pixelate: deepClone(pixelate),
+            pixelateEnabled: true,
             stage: 'art',
           })),
         },
@@ -721,7 +728,11 @@ function evaluateNode(
     case 'palette': {
       if (!media) return null;
       const palette = (node.params.palette as PaletteSettings) ?? deepClone(DEFAULT_PALETTE);
-      const items = media.items.map((item) => ({ ...item, palette: deepClone(palette) }));
+      const items = media.items.map((item) => ({
+        ...item,
+        palette: deepClone(palette),
+        paletteEnabled: true,
+      }));
       return {
         media: { type: 'media', items },
         palette: {
@@ -746,7 +757,9 @@ function evaluateNode(
             return {
               ...item,
               dither: deepClone(dither),
+              ditherEnabled: true,
               palette: override ? deepClone(override) : item.palette,
+              paletteEnabled: item.paletteEnabled || Boolean(override),
               stage: 'art',
             };
           }),
@@ -1047,6 +1060,9 @@ function makeItem(node: GraphNode, asset: GraphAsset): GraphMediaItem {
     postprocess: { ops: [], lockPalette: false },
     resolution: deepClone(s.resolution),
     pixelate: deepClone(s.pixelate),
+    pixelateEnabled: false,
+    paletteEnabled: false,
+    ditherEnabled: false,
     palette: deepClone(s.palette),
     dither: deepClone(s.dither),
     output: deepClone(s.output),
@@ -1065,15 +1081,45 @@ function toOps(value: unknown): PreprocessOp[] {
 /* -------------------------------------------------------------------------- */
 
 export function settingsFromItem(item: GraphMediaItem): PixelArtifySettings {
+  const pixelate = deepClone(item.pixelate);
+  pixelate.enabled = item.pixelateEnabled;
+
+  // Never apply the default look (tone, palette auto-extraction or dithering)
+  // unless the corresponding node is actually present in the branch. A bare
+  // Media input → Output graph is a true pass-through.
+  if (!item.pixelateEnabled) {
+    pixelate.contrast = 1;
+    pixelate.brightness = 0;
+    pixelate.saturation = 1;
+    pixelate.gamma = 1;
+    pixelate.hueShift = 0;
+    pixelate.preBlur = 0;
+    pixelate.postSharpen = 0;
+    pixelate.alphaThreshold = 0;
+  }
+
+  const palette = deepClone(item.palette);
+  if (!item.paletteEnabled) palette.mode = 'none';
+
+  const dither = deepClone(item.dither);
+  if (!item.ditherEnabled) dither.algorithm = 'none';
+
   return {
-    resolution: deepClone(item.resolution),
+    resolution: item.pixelateEnabled
+      ? deepClone(item.resolution)
+      : {
+          ...deepClone(item.resolution),
+          mode: 'native',
+          exportScale: 1,
+          snapEven: false,
+        },
     preprocess: { ops: [...item.preprocessOps, ...item.latePreprocessOps] },
     postprocess: deepClone(item.postprocess),
-    pixelate: deepClone(item.pixelate),
+    pixelate,
     extraction: deepClone(item.extraction),
-    layers: deepClone(item.layers),
-    palette: deepClone(item.palette),
-    dither: deepClone(item.dither),
+    layers: item.pixelateEnabled ? deepClone(item.layers) : [],
+    palette,
+    dither,
     output: deepClone(item.output),
     video: deepClone(item.video),
   };

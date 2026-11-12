@@ -17,6 +17,7 @@ import { createPreprocessOp } from './preprocess';
 import { DEFAULT_RESOLUTION } from './resolution';
 
 export const DEFAULT_PIXELATE: PixelateSettings = {
+  enabled: true,
   edgeAware: true,
   alignment: 0.68,
   colorBlend: 0.7,

@@ -21,6 +21,7 @@ export interface MaskData {
 }
 
 export type ResolutionMode =
+  | 'native'
   | 'fixed-height'
   | 'fixed-width'
   | 'short-side'
@@ -92,6 +93,11 @@ export interface PostprocessSettings {
 }
 
 export interface PixelateSettings {
+  /**
+   * False when no Pixelate node exists in the branch. The pipeline then passes
+   * the source through at its native size (apart from explicitly wired effects).
+   */
+  enabled?: boolean;
   edgeAware: boolean;
   /** 0 = homogeneous cells, 1 = strongly snap sampling windows to edges. */
   alignment: number;

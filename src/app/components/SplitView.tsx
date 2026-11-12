@@ -43,7 +43,7 @@ export function SplitView(): React.ReactElement {
           <span>output preview</span>
         </header>
         <div className="split-pane-body">
-          <Viewer />
+          <Viewer resizeKey={ratio} />
         </div>
       </section>
       <div
