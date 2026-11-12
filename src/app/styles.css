@@ -3010,7 +3010,6 @@ input[type="range"]::-moz-range-thumb {
 
 .palette-studio-target {
   margin-right: auto;
-  color: var(--mutem);
   color: var(--muted);
   font-size: 10px;
 }
