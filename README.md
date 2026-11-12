@@ -29,7 +29,7 @@ PixelArtify Studio turns drawings, photos and videos into deliberate pixel art. 
 - **10 pre-processing effects** — Kuwahara painterly, oil paint, watercolour, posterize, fractal noise displacement, grain, soften, sharpen, bloom and chunky blur. The Color Correct node is also available as a pre-process op.
 - **8 post-processing effects** — sprite outline, bloom, grain, scanlines, vignette, chromatic aberration, CRT and final sharpen.
 - **Crop, resize and channels** — nearest/bilinear/box/bicubic/Lanczos3 resampling, alpha-safe; channel extract/swap/pack, luma↔alpha and HSL→RGB channel encoding.
-- **Layer extraction and inpainting** — saliency, subject box/ellipse, chroma key, luma, edge and manual masks. Background layers inpaint occluded regions with directional/mirrored fill, diffusion or dithered regeneration. Separate occlusion masks keep foregrounds tight while removing legs and shadows from the background.
+- **Layer extraction and inpainting** — saliency, subject box/ellipse, chroma key, luma, edge and manual masks. **Magic select** paints positive/negative strokes and grows an edge-aware subject mask; on video, **Apply & track** follows the subject and caches per-frame masks. Background layers inpaint occluded regions with directional/mirrored fill, diffusion or dithered regeneration. Separate occlusion masks keep foregrounds tight while removing legs and shadows from the background.
 - **Video in, video / spritesheet out** — frame-accurate WebCodecs decoding via [Mediabunny](https://mediabunny.dev), H.264/VP9/AV1 encoding, spritesheet packing with metadata, or both in one ZIP. Long animations are split across several sheets, and A4 print pages with + registration marks are available for printing and rescanning.
 - **Presets** — save/import/export the whole graph. Built-ins include Sharp Sprite, Painterly Mosaic, 1-bit Ink, Game Boy DMG, Cinematic 32, Layered Parallax, Spritesheet Export, Chunky Sweetie and Batch Portraits.
 - **Batch CLI** — folders of images, graph evaluation, video processing with ffmpeg, layer manifests and spritesheets.
@@ -61,7 +61,7 @@ Open <http://localhost:5173>. Everything runs locally. Drop images or videos ont
 
 ```bash
 npm run build      # typecheck + production build
-npm run test       # 36 core tests
+npm run test       # 38 core tests
 npm run cli -- --help
 npm run build:cli  # bundle the headless CLI
 ```
@@ -85,7 +85,7 @@ The studio targets modern Chromium/Firefox/Safari. Video decoding/encoding uses 
 | **Pixelate** | Resolution policy + edge-aware sampler. Defines the art size. |
 | **Palette** | Auto-extracted or custom palette; outputs media and palette sockets. |
 | **Dither** | Algorithm, strength, pattern scale, colour space, serpentine scan, threshold and seed. |
-| **Feature extract** | Saliency, subject box/ellipse, chroma, luma, edge or manual mask. Outputs a mask bundle. Enable **Only extracted** to multiply the media output by the mask, leaving everything else transparent. |
+| **Feature extract** | Saliency, subject box/ellipse, chroma, luma, edge or manual mask. Outputs a mask bundle. **Magic select** paints positive/negative strokes and grows a subject mask; on video, **Apply & track** follows and caches per-frame masks. Enable **Only extracted** to multiply the media output by the mask. |
 | **Compose layers** | Layer stack with visibility, opacity, blend, offsets, scaling, detail high-pass, masks, occlusion masks and inpainting settings. |
 | **Post-process** | Outline, bloom, grain, scanlines, vignette, chromatic aberration, CRT, sharpen. |
 | **Merge** | Concatenate multiple media bundles into one batch. |
@@ -191,8 +191,11 @@ Every algorithm honours `strength`, `scale` (art pixels), `threshold` bias and s
    - **Chroma / luma / edge** — keying, tonal masks, detail masks.
    - **Manual** — paint directly on the preview with add/erase, softness, invert and feather.
    - **Only extracted** — applies the mask to the Extract node's media output, so the subject stays and the rest becomes transparent. The mask output is still available for Compose.
-   - **Select subject** — opens a box selection on the preview. Drag around the subject; the box becomes a manual mask override and alpha-only output is enabled. **Paint mask** and **Reset mask override** remain available for adjustment.
+   - **Magic select** — paint over the subject with the brush; positive strokes add and erase strokes subtract. The mask grows through connected pixels with similar OKLab colour and stops at strong edges. Adjust brush size and colour tolerance, then Apply. **Box** remains available for a simple rectangular selection. **Paint mask** and **Reset mask override** refine it further.
+   - **Apply & track** (video) — after painting the subject, tracks the mask through the clip using the previous frame's colour model and local motion, then caches per-frame masks. Scrubbing and playback reuse the cache; the Extract panel shows `tracked · N frames`.
    - On video, only-extracted is applied to every live preview and exported frame. H.264/VP9 still flatten transparency, so use PNG/spritesheet output when alpha matters.
+
+> Magic select is a deterministic local colour/edge segmentation, not a downloaded neural model. It handles solid and moderately textured subjects well; very fast motion, heavy occlusion or camouflage may need extra erase strokes or a fresh selection. Tracking runs at 12 fps and caches masks in memory for the current session.
 2. Add a **Compose layers** node and connect one or more mask bundles.
 3. Layer roles:
    - **Background** — full image, optionally inpaints regions hidden by higher layers.
@@ -309,7 +312,7 @@ The core is DOM-free. The browser UI, the CLI and future workers all call the sa
 npm run test
 ```
 
-Covered: resolution independence, resampling/alpha correctness, palette formats and extraction, dither palette exactness and determinism, render pipeline, layer inpainting, crop/resize/channel/color graph nodes, resize times and nearest default, extract isolation, cycle detection, preset round-trip, multi-sheet splitting, A4 registration-mark layout and upscaling.
+Covered: resolution independence, resampling/alpha correctness, palette formats and extraction, dither palette exactness and determinism, render pipeline, layer inpainting, crop/resize/channel/color graph nodes, resize times and nearest default, extract isolation, magic-mask growth and tracking, cycle detection, preset round-trip, multi-sheet splitting, A4 registration-mark layout and upscaling.
 
 ---
 

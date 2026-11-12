@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createMask, featherMask, invertMask } from '../../core/image';
-import type { GraphNode, MaskData } from '../../core/types';
+import { buildMagicMask, type MagicSeed } from '../../core/magic';
+import type { GraphNode, MaskData, PixelImage } from '../../core/types';
 import { useStudio } from '../store';
 import { pixelImageToDataUrl } from '../io';
 import { GPU_MIN_PIXELS, gpuAvailable } from '../gpuPixelate';
@@ -25,6 +26,9 @@ export function Viewer({ resizeKey }: { resizeKey?: number | string } = {}): Rea
     activeItem,
     subjectSelect,
     endSubjectSelect,
+    maskTracking,
+    trackSubject,
+    clearTrackedMask,
     maskEdit,
     endMaskEdit,
     setMaskEdit,
@@ -61,6 +65,12 @@ export function Viewer({ resizeKey }: { resizeKey?: number | string } = {}): Rea
   const [compareDragging, setCompareDragging] = useState(false);
   const [subjectRect, setSubjectRect] = useState<{ x0: number; y0: number; x1: number; y1: number } | null>(null);
   const subjectStartRef = useRef<{ x: number; y: number } | null>(null);
+  const magicCanvasRef = useRef<HTMLCanvasElement>(null);
+  const magicStrokesRef = useRef<Array<{ points: Array<{ x: number; y: number }>; positive: boolean; radiusPx: number }>>([]);
+  const magicDrawingRef = useRef(false);
+  const [magicMode, setMagicMode] = useState<'add' | 'erase'>('add');
+  const [magicBrush, setMagicBrush] = useState(18);
+  const [magicTolerance, setMagicTolerance] = useState(0.18);
 
   const art = preview?.art ?? null;
   const artW = art?.width ?? 1;
@@ -233,13 +243,15 @@ export function Viewer({ resizeKey }: { resizeKey?: number | string } = {}): Rea
           mask.data[y * source.width + x] = 255;
         }
       }
-      setMaskOverride(`${subjectSelect.nodeId}:${activeAsset.id}:${subjectSelect.maskId}`, mask);
+      const key = `${subjectSelect.nodeId}:${activeAsset.id}:${subjectSelect.maskId}`;
+      clearTrackedMask(key);
+      setMaskOverride(key, mask);
       notify('Subject selected. Only-extracted output is now active.', 'success');
       setSubjectRect(null);
       subjectStartRef.current = null;
       endSubjectSelect();
     },
-    [activeAsset, activeItem, endSubjectSelect, notify, setMaskOverride, subjectSelect],
+    [activeAsset, activeItem, clearTrackedMask, endSubjectSelect, notify, setMaskOverride, subjectSelect],
   );
 
   const finishSubjectRect = useCallback(
@@ -253,18 +265,198 @@ export function Viewer({ resizeKey }: { resizeKey?: number | string } = {}): Rea
     [commitSubjectRect, normalizeSubjectPoint],
   );
 
+  const redrawMagicStrokes = useCallback(() => {
+    const canvas = magicCanvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    for (const stroke of magicStrokesRef.current) {
+      const color = stroke.positive ? 'rgba(6, 214, 160, 0.55)' : 'rgba(255, 92, 92, 0.55)';
+      ctx.strokeStyle = color;
+      ctx.fillStyle = color;
+      ctx.lineWidth = Math.max(1, stroke.radiusPx * 2);
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
+      if (stroke.points.length === 1) {
+        const p = stroke.points[0];
+        ctx.beginPath();
+        ctx.arc(p.x * canvas.width, p.y * canvas.height, stroke.radiusPx, 0, Math.PI * 2);
+        ctx.fill();
+      } else {
+        ctx.beginPath();
+        stroke.points.forEach((p, i) => {
+          const x = p.x * canvas.width;
+          const y = p.y * canvas.height;
+          if (i === 0) ctx.moveTo(x, y);
+          else ctx.lineTo(x, y);
+        });
+        ctx.stroke();
+      }
+    }
+  }, []);
+
+  const beginMagicStroke = useCallback(
+    (clientX: number, clientY: number, erase: boolean) => {
+      const p = normalizeSubjectPoint(clientX, clientY);
+      if (!p) return;
+      magicDrawingRef.current = true;
+      magicStrokesRef.current.push({
+        points: [p],
+        positive: !erase,
+        radiusPx: magicBrush,
+      });
+      redrawMagicStrokes();
+    },
+    [magicBrush, normalizeSubjectPoint, redrawMagicStrokes],
+  );
+
+  const moveMagicStroke = useCallback(
+    (clientX: number, clientY: number) => {
+      if (!magicDrawingRef.current) return;
+      const p = normalizeSubjectPoint(clientX, clientY);
+      const stroke = magicStrokesRef.current[magicStrokesRef.current.length - 1];
+      if (!p || !stroke) return;
+      const last = stroke.points[stroke.points.length - 1];
+      const minStep = 2 / Math.max(1, wrapperRef.current?.clientWidth ?? 1);
+      if (Math.hypot(p.x - last.x, p.y - last.y) < minStep) return;
+      stroke.points.push(p);
+      redrawMagicStrokes();
+    },
+    [normalizeSubjectPoint, redrawMagicStrokes],
+  );
+
+  const clearMagicStrokes = useCallback(() => {
+    magicDrawingRef.current = false;
+    magicStrokesRef.current = [];
+    const canvas = magicCanvasRef.current;
+    const ctx = canvas?.getContext('2d');
+    if (canvas && ctx) ctx.clearRect(0, 0, canvas.width, canvas.height);
+  }, []);
+
+  const buildMagicSeeds = useCallback((source: PixelImage): MagicSeed[] => {
+    const displayWidth = Math.max(1, wrapperRef.current?.clientWidth ?? 1);
+    const seeds: MagicSeed[] = [];
+    for (const stroke of magicStrokesRef.current) {
+      const radius = Math.max(1, (stroke.radiusPx / displayWidth) * source.width);
+      for (const p of stroke.points) {
+        seeds.push({
+          x: p.x * source.width,
+          y: p.y * source.height,
+          radius,
+          positive: stroke.positive,
+        });
+      }
+    }
+    return seeds;
+  }, []);
+
+  const applyMagicMask = useCallback(() => {
+    if (!subjectSelect || !activeAsset) return;
+    const source = videoFrame ?? activeItem?.source;
+    if (!source) {
+      notify('Select a media asset first.', 'warn');
+      return;
+    }
+    if (!magicStrokesRef.current.some((stroke) => stroke.positive && stroke.points.length > 0)) {
+      notify('Paint over the subject before applying the magic mask.', 'warn');
+      return;
+    }
+    const seeds = buildMagicSeeds(source);
+    const mask = buildMagicMask(source, seeds, {
+      tolerance: magicTolerance,
+      feather: 1.5,
+      maxSide: 512,
+    });
+    let inside = 0;
+    for (let i = 0; i < mask.data.length; i++) if (mask.data[i] > 127) inside++;
+    const key = `${subjectSelect.nodeId}:${activeAsset.id}:${subjectSelect.maskId}`;
+    clearTrackedMask(key);
+    setMaskOverride(key, mask);
+    notify(
+      `Magic mask applied (${Math.round((inside / Math.max(1, mask.data.length)) * 100)}% selected).`,
+      'success',
+    );
+    clearMagicStrokes();
+    setSubjectRect(null);
+    endSubjectSelect();
+  }, [
+    activeAsset,
+    activeItem,
+    buildMagicSeeds,
+    clearMagicStrokes,
+    clearTrackedMask,
+    endSubjectSelect,
+    magicTolerance,
+    notify,
+    setMaskOverride,
+    subjectSelect,
+    videoFrame,
+  ]);
+
+  const applyMagicMaskAndTrack = useCallback(() => {
+    if (!subjectSelect || !activeAsset) return;
+    if (activeAsset.kind !== 'video' || !activeAsset.file) {
+      applyMagicMask();
+      return;
+    }
+    const source = videoFrame ?? activeItem?.source;
+    if (!source) {
+      notify('Select a video asset first.', 'warn');
+      return;
+    }
+    if (!magicStrokesRef.current.some((stroke) => stroke.positive && stroke.points.length > 0)) {
+      notify('Paint over the subject before tracking the mask.', 'warn');
+      return;
+    }
+    const seeds = buildMagicSeeds(source);
+    const { nodeId, maskId } = subjectSelect;
+    clearMagicStrokes();
+    setSubjectRect(null);
+    endSubjectSelect();
+    void trackSubject(nodeId, maskId, seeds, magicTolerance);
+  }, [
+    activeAsset,
+    activeItem,
+    applyMagicMask,
+    buildMagicSeeds,
+    clearMagicStrokes,
+    endSubjectSelect,
+    magicTolerance,
+    notify,
+    subjectSelect,
+    trackSubject,
+    videoFrame,
+  ]);
+
+  useEffect(() => {
+    if (subjectSelect?.mode !== 'magic') return;
+    magicStrokesRef.current = [];
+    redrawMagicStrokes();
+  }, [subjectSelect?.maskId, subjectSelect?.mode, subjectSelect?.nodeId, redrawMagicStrokes]);
+
+  useEffect(() => {
+    if (subjectSelect?.mode === 'magic') redrawMagicStrokes();
+  }, [scale, artW, artH, subjectSelect?.mode, redrawMagicStrokes]);
+
   useEffect(() => {
     if (!subjectSelect) return;
     const onKey = (e: KeyboardEvent): void => {
       if (e.key === 'Escape') {
         subjectStartRef.current = null;
         setSubjectRect(null);
+        clearMagicStrokes();
         endSubjectSelect();
+      } else if (e.key === 'Enter' && subjectSelect.mode === 'magic') {
+        e.preventDefault();
+        applyMagicMask();
+      } else if ((e.key === 'e' || e.key === 'E') && subjectSelect.mode === 'magic') {
+        setMagicMode((prev) => (prev === 'add' ? 'erase' : 'add'));
       }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [endSubjectSelect, subjectSelect]);
+  }, [applyMagicMask, clearMagicStrokes, endSubjectSelect, subjectSelect]);
 
   const fit = useCallback(
     (size?: { width: number; height: number }) => {
@@ -636,7 +828,7 @@ export function Viewer({ resizeKey }: { resizeKey?: number | string } = {}): Rea
                   }}
                 />
               ) : null}
-              {subjectSelect && !maskEdit ? (
+              {subjectSelect?.mode === 'box' && !maskEdit ? (
                 <div
                   className="subject-select-surface"
                   onPointerDown={(e) => {
@@ -679,6 +871,100 @@ export function Viewer({ resizeKey }: { resizeKey?: number | string } = {}): Rea
                       }}
                     />
                   ) : null}
+                </div>
+              ) : null}
+
+              {subjectSelect?.mode === 'magic' && !maskEdit ? (
+                <div
+                  className="subject-select-surface magic"
+                  onPointerDown={(e) => {
+                    if ((e.target as HTMLElement).closest('.magic-toolbar')) return;
+                    e.preventDefault();
+                    e.stopPropagation();
+                    try {
+                      (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+                    } catch {
+                      // Synthetic pointers may not support capture.
+                    }
+                    beginMagicStroke(e.clientX, e.clientY, magicMode === 'erase' || e.altKey);
+                  }}
+                  onPointerMove={(e) => {
+                    if ((e.target as HTMLElement).closest('.magic-toolbar')) return;
+                    moveMagicStroke(e.clientX, e.clientY);
+                  }}
+                  onPointerUp={() => {
+                    magicDrawingRef.current = false;
+                  }}
+                  onPointerCancel={() => {
+                    magicDrawingRef.current = false;
+                  }}
+                  onContextMenu={(e) => e.preventDefault()}
+                >
+                  <canvas
+                    ref={magicCanvasRef}
+                    className="subject-brush-canvas"
+                    width={Math.max(1, Math.round(artW * scale))}
+                    height={Math.max(1, Math.round(artH * scale))}
+                  />
+                  <div className="magic-toolbar" onPointerDown={(e) => e.stopPropagation()}>
+                    <Segmented
+                      label="Brush"
+                      value={magicMode}
+                      options={[
+                        { value: 'add', label: 'Add' },
+                        { value: 'erase', label: 'Erase' },
+                      ]}
+                      onChange={(v) => setMagicMode(v as 'add' | 'erase')}
+                    />
+                    <div className="magic-slider">
+                      <Slider
+                        label="Size"
+                        value={magicBrush}
+                        min={4}
+                        max={80}
+                        step={1}
+                        unit="px"
+                        onChange={setMagicBrush}
+                      />
+                    </div>
+                    <div className="magic-slider">
+                      <Slider
+                        label="Tolerance"
+                        value={magicTolerance}
+                        min={0.05}
+                        max={0.5}
+                        step={0.01}
+                        onChange={setMagicTolerance}
+                      />
+                    </div>
+                    <button type="button" className="primary-btn small" onClick={applyMagicMask}>
+                      Apply
+                    </button>
+                    {activeAsset?.kind === 'video' ? (
+                      <button
+                        type="button"
+                        className="primary-btn small"
+                        onClick={applyMagicMaskAndTrack}
+                        disabled={Boolean(maskTracking)}
+                      >
+                        {maskTracking ? `Tracking ${maskTracking.done}/${maskTracking.total}` : 'Apply & track'}
+                      </button>
+                    ) : null}
+                    <button
+                      type="button"
+                      className="ghost-btn small"
+                      onClick={() => {
+                        clearMagicStrokes();
+                        setSubjectRect(null);
+                        endSubjectSelect();
+                      }}
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                  <span className="subject-select-hint">
+                    Paint over the subject · Alt-drag erases · Enter applies
+                  </span>
                 </div>
               ) : null}
 

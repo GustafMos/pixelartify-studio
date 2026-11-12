@@ -46,6 +46,8 @@ export function ExtractPanel({ node }: { node: GraphNode }): React.ReactElement 
     refreshMasks,
     beginMaskEdit,
     beginSubjectSelect,
+    maskTracking,
+    trackedMasks,
     clearMaskOverride,
     maskOverrides,
     videoFrame,
@@ -57,6 +59,8 @@ export function ExtractPanel({ node }: { node: GraphNode }): React.ReactElement 
   const maskId = String(node.params.maskId ?? 'subject');
   const maskKey = activeAsset ? `${node.id}:${activeAsset.id}:${maskId}` : '';
   const override = maskKey ? maskOverrides[maskKey] : undefined;
+  const tracked = maskKey ? trackedMasks[maskKey] : undefined;
+  const tracking = maskKey && maskTracking?.key === maskKey ? maskTracking : null;
 
   const mask = useMemo(() => {
     const value = evaluation.values.get(node.id)?.mask;
@@ -113,9 +117,23 @@ export function ExtractPanel({ node }: { node: GraphNode }): React.ReactElement 
           )}
           <div className="mask-preview-meta">
             <Badge tone={override ? 'success' : 'neutral'}>{override ? 'manual' : 'auto'}</Badge>
+            {tracked ? (
+              <Badge tone="success">tracked · {tracked.masks.length} frames</Badge>
+            ) : null}
+            {tracking ? (
+              <Badge tone="warn">
+                tracking {tracking.done}/{tracking.total}
+              </Badge>
+            ) : null}
             <span>{mask ? `${mask.width}×${mask.height}` : '—'}</span>
           </div>
         </div>
+        {activeAsset?.kind === 'video' ? (
+          <p className="micro-copy">
+            <strong>Magic select → Apply &amp; track</strong> follows the subject through the clip and caches
+            per-frame masks. Painted or box selections stay static.
+          </p>
+        ) : null}
         <div className="btn-row">
           <button type="button" className="ghost-btn small" onClick={refreshMasks}>
             <Icon name="refresh" size={14} /> Re-extract
@@ -128,11 +146,25 @@ export function ExtractPanel({ node }: { node: GraphNode }): React.ReactElement 
                 onlyExtracted: true,
                 extraction: { ...extraction, enabled: true },
               });
-              beginSubjectSelect(node.id, maskId);
+              beginSubjectSelect(node.id, maskId, 'magic');
             }}
             disabled={!activeAsset}
           >
-            <Icon name="fit" size={14} /> Select subject
+            <Icon name="wand" size={14} /> Magic select
+          </button>
+          <button
+            type="button"
+            className="ghost-btn small"
+            onClick={() => {
+              updateNodeParams(node.id, {
+                onlyExtracted: true,
+                extraction: { ...extraction, enabled: true },
+              });
+              beginSubjectSelect(node.id, maskId, 'box');
+            }}
+            disabled={!activeAsset}
+          >
+            <Icon name="fit" size={14} /> Box
           </button>
           <button
             type="button"

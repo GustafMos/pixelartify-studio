@@ -9,6 +9,7 @@ import {
   applyChannels,
   applyColorCorrection,
   applyDither,
+  buildMagicMask,
   computeArtSize,
   computeWorkingSize,
   createImage,
@@ -28,6 +29,7 @@ import {
   settingsFromGraph,
   settingsFromItem,
   threeLayerStack,
+  trackMagicMaskFrame,
   upscaleNearest,
 } from '../src/core';
 import {
@@ -669,6 +671,53 @@ describe('spritesheet safety', () => {
       expect(sheet.sheetHeight).toBeLessThanOrEqual(64);
     }
     expect(sheets.reduce((n, s) => n + s.frames.length, 0)).toBe(20);
+  });
+});
+
+describe('magic mask', () => {
+  const makeSubject = (offset: number): ReturnType<typeof createImage> => {
+    const img = createImage(80, 60);
+    for (let y = 0; y < 60; y++) {
+      for (let x = 0; x < 80; x++) {
+        const i = (y * 80 + x) * 4;
+        const inside = x >= 20 + offset && x < 44 + offset && y >= 14 && y < 42;
+        const inner = x >= 28 + offset && x < 36 + offset && y >= 22 && y < 34;
+        img.data[i] = inside ? (inner ? 45 : 235) : 0;
+        img.data[i + 1] = inside ? (inner ? 55 : 225) : 255;
+        img.data[i + 2] = inside ? (inner ? 65 : 210) : 0;
+        img.data[i + 3] = 255;
+      }
+    }
+    return img;
+  };
+
+  it('grows a subject mask from a positive brush seed', () => {
+    const img = makeSubject(0);
+    const mask = buildMagicMask(
+      img,
+      [{ x: 26, y: 22, radius: 5, positive: true }],
+      { tolerance: 0.14, feather: 0 },
+    );
+    const at = (x: number, y: number): number => mask.data[y * 80 + x];
+    expect(at(2, 2)).toBe(0);
+    expect(at(78, 58)).toBe(0);
+    expect(at(30, 20)).toBe(255);
+    expect(at(34, 28)).toBe(255); // enclosed inner detail is filled
+  });
+
+  it('tracks the mask into a shifted frame', () => {
+    const first = makeSubject(0);
+    const second = makeSubject(10);
+    const mask = buildMagicMask(
+      first,
+      [{ x: 26, y: 22, radius: 5, positive: true }],
+      { tolerance: 0.14, feather: 0 },
+    );
+    const tracked = trackMagicMaskFrame(second, first, mask, { tolerance: 0.14, feather: 0 });
+    const at = (x: number, y: number): number => tracked.data[y * 80 + x];
+    expect(at(36, 26)).toBe(255);
+    expect(at(2, 2)).toBe(0);
+    expect(at(78, 58)).toBe(0);
   });
 });
 

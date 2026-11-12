@@ -41,7 +41,7 @@ import {
   NODE_DEFS,
   createDefaultGraph,
   deleteNodePreservingGraph,
-  applyItemAlphaCuts,
+  applyTrackedAlphaCuts,
   type GraphAsset,
   type GraphMediaItem,
 } from '../core/graph';
@@ -57,7 +57,10 @@ import {
   downloadBlob,
   downloadZip,
 } from './io';
-import { grabVideoFrame, probeVideo, type VideoProbe } from './video';
+import { buildMagicMask, trackMagicMaskFrame, type MagicSeed } from '../core/magic';
+import { resizeMask } from '../core/image';
+import type { TrackedMaskSequence } from '../core/graph';
+import { grabVideoFrame, probeVideo, extractVideoFrames, type VideoProbe } from './video';
 
 export interface AssetRecord {
   id: string;
@@ -118,7 +121,16 @@ interface StudioContextValue {
   videoFrame: PixelImage | null;
   videoFrameLoading: boolean;
   videoPlaying: boolean;
-  subjectSelect: { nodeId: string; maskId: string } | null;
+  subjectSelect: { nodeId: string; maskId: string; mode: 'magic' | 'box' } | null;
+  maskTracking: { key: string; done: number; total: number } | null;
+  trackedMasks: Record<string, TrackedMaskSequence>;
+  clearTrackedMask: (key: string) => void;
+  trackSubject: (
+    nodeId: string,
+    maskId: string,
+    seeds: MagicSeed[],
+    tolerance: number,
+  ) => Promise<void>;
   paletteStudioOpen: boolean;
   toasts: Toast[];
   setMode: (mode: 'studio' | 'split' | 'graph') => void;
@@ -130,7 +142,7 @@ interface StudioContextValue {
   setVideoTime: (time: number) => void;
   setVideoPlaying: (playing: boolean) => void;
   onPlaybackFrame: (image: PixelImage, time: number) => void;
-  beginSubjectSelect: (nodeId: string, maskId: string) => void;
+  beginSubjectSelect: (nodeId: string, maskId: string, mode?: 'magic' | 'box') => void;
   endSubjectSelect: () => void;
   setPreviewFullQuality: (full: boolean) => void;
   addNode: (type: GraphNodeType, x?: number, y?: number) => string;
@@ -211,7 +223,13 @@ export function StudioProvider({ children }: { children: React.ReactNode }): Rea
   const [videoFrame, setVideoFrame] = useState<PixelImage | null>(null);
   const [videoFrameLoading, setVideoFrameLoading] = useState(false);
   const [videoPlaying, setVideoPlayingState] = useState(false);
-  const [subjectSelect, setSubjectSelect] = useState<{ nodeId: string; maskId: string } | null>(null);
+  const [subjectSelect, setSubjectSelect] = useState<{
+    nodeId: string;
+    maskId: string;
+    mode: 'magic' | 'box';
+  } | null>(null);
+  const [maskTracking, setMaskTracking] = useState<{ key: string; done: number; total: number } | null>(null);
+  const [trackedMasks, setTrackedMasks] = useState<Record<string, TrackedMaskSequence>>({});
   const [paletteStudioOpen, setPaletteStudioOpen] = useState(false);
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [isExporting, setIsExporting] = useState(false);
@@ -384,7 +402,7 @@ export function StudioProvider({ children }: { children: React.ReactNode }): Rea
         let source = activeItem.source;
         let masks = activeItem.masks;
         if (activeAsset?.kind === 'video' && videoFrame) {
-          source = applyItemAlphaCuts(activeItem, videoFrame);
+          source = applyTrackedAlphaCuts(activeItem, videoFrame, videoTime, trackedMasks);
           masks = { ...masks };
         }
         const result = renderPixelArt(
@@ -413,7 +431,7 @@ export function StudioProvider({ children }: { children: React.ReactNode }): Rea
     }, videoPlaying ? 0 : 110);
 
     return () => window.clearTimeout(timer);
-  }, [previewNode, activeItem, activeAsset, videoFrame, videoPlaying, previewFullQuality]);
+  }, [previewNode, activeItem, activeAsset, videoFrame, videoPlaying, previewFullQuality, trackedMasks]);
 
   // Persist the graph and libraries.
   useEffect(() => {
@@ -493,12 +511,15 @@ export function StudioProvider({ children }: { children: React.ReactNode }): Rea
     setVideoFrame(image);
     setVideoTimeState(Math.max(0, time));
   }, []);
-  const beginSubjectSelect = useCallback((nodeId: string, maskId: string) => {
-    setMaskEditState(null);
-    setSubjectSelect({ nodeId, maskId });
-    setSelectedNodeId(nodeId);
-    setModeState((prev) => (prev === 'graph' ? 'split' : prev));
-  }, []);
+  const beginSubjectSelect = useCallback(
+    (nodeId: string, maskId: string, mode: 'magic' | 'box' = 'magic') => {
+      setMaskEditState(null);
+      setSubjectSelect({ nodeId, maskId, mode });
+      setSelectedNodeId(nodeId);
+      setModeState((prev) => (prev === 'graph' ? 'split' : prev));
+    },
+    [],
+  );
   const endSubjectSelect = useCallback(() => setSubjectSelect(null), []);
 
   const addNode = useCallback((type: GraphNodeType, x?: number, y?: number): string => {
@@ -1021,8 +1042,22 @@ export function StudioProvider({ children }: { children: React.ReactNode }): Rea
   const setMaskOverride = useCallback((key: string, mask: MaskData) => {
     setMaskOverrides((prev) => ({ ...prev, [key]: mask }));
   }, []);
+  const clearTrackedMask = useCallback((key: string) => {
+    setTrackedMasks((prev) => {
+      if (!(key in prev)) return prev;
+      const next = { ...prev };
+      delete next[key];
+      return next;
+    });
+  }, []);
   const clearMaskOverride = useCallback((key: string) => {
     setMaskOverrides((prev) => {
+      const next = { ...prev };
+      delete next[key];
+      return next;
+    });
+    setTrackedMasks((prev) => {
+      if (!(key in prev)) return prev;
       const next = { ...prev };
       delete next[key];
       return next;
@@ -1032,9 +1067,85 @@ export function StudioProvider({ children }: { children: React.ReactNode }): Rea
   const refreshMasks = useCallback(() => {
     maskCacheRef.current.clear();
     setMaskOverrides({});
+    setTrackedMasks({});
     setGraph((g) => ({ ...g }));
     setHistoryTick((v) => v + 1);
   }, []);
+
+  const trackSubject = useCallback(
+    async (nodeId: string, maskId: string, seeds: MagicSeed[], tolerance: number): Promise<void> => {
+      if (!activeAsset || activeAsset.kind !== 'video' || !activeAsset.file) {
+        notify('Tracking needs a video asset selected in a Media input.', 'warn');
+        return;
+      }
+      if (maskTracking) {
+        notify('A mask is already being tracked.', 'warn');
+        return;
+      }
+      const key = `${nodeId}:${activeAsset.id}:${maskId}`;
+      const duration = activeAsset.duration ?? 0;
+      const trackingFps = Math.max(1, Math.min(12, 900 / Math.max(1, duration)));
+      const total = Math.max(1, Math.ceil(duration * trackingFps));
+      const sourceWidth = activeItem?.assetId === activeAsset.id ? activeItem.source.width : activeAsset.width;
+      const sourceHeight = activeItem?.assetId === activeAsset.id ? activeItem.source.height : activeAsset.height;
+      setMaskTracking({ key, done: 0, total });
+      const masks: MaskData[] = [];
+      let previousFrame: PixelImage | null = null;
+      let previousMask: MaskData | null = null;
+      try {
+        await extractVideoFrames(
+          activeAsset.file,
+          {
+            start: 0,
+            end: null,
+            fps: trackingFps,
+            maxSide: 512,
+            onProgress: (done, count) => setMaskTracking({ key, done, total: count }),
+          },
+          async (frame) => {
+            let mask: MaskData;
+            if (!previousMask) {
+              const scale = frame.width / Math.max(1, sourceWidth);
+              const scaledSeeds = seeds.map((seed) => ({
+                ...seed,
+                x: seed.x * scale,
+                y: seed.y * scale,
+                radius: Math.max(1, seed.radius * scale),
+              }));
+              mask = buildMagicMask(frame, scaledSeeds, {
+                tolerance,
+                feather: 1.2,
+                maxSide: 512,
+              });
+            } else {
+              mask = trackMagicMaskFrame(frame, previousFrame ?? frame, previousMask, {
+                tolerance,
+                feather: 1.2,
+                edgeBarrier: 0.4,
+              });
+            }
+            masks.push(mask);
+            previousMask = mask;
+            previousFrame = frame;
+          },
+        );
+        if (masks.length === 0) throw new Error('No frames were decoded.');
+        setTrackedMasks((prev) => ({ ...prev, [key]: { fps: trackingFps, masks } }));
+        const base = resizeMask(masks[0], sourceWidth, sourceHeight);
+        setMaskOverride(key, base);
+        notify(`Mask tracked and cached across ${masks.length} frames.`, 'success');
+      } catch (err) {
+        if (err instanceof DOMException && err.name === 'AbortError') {
+          notify('Mask tracking cancelled.', 'warn');
+        } else {
+          notify(`Mask tracking failed: ${err instanceof Error ? err.message : err}`, 'error');
+        }
+      } finally {
+        setMaskTracking(null);
+      }
+    },
+    [activeAsset, activeItem, maskTracking, notify, setMaskOverride],
+  );
   const beginMaskEdit = useCallback((nodeId: string, maskId: string) => {
     setSubjectSelect(null);
     setMaskEditState({ nodeId, maskId, brushSize: 14, feather: 2, action: 'add' });
@@ -1261,6 +1372,10 @@ export function StudioProvider({ children }: { children: React.ReactNode }): Rea
     videoFrameLoading,
     videoPlaying,
     subjectSelect,
+    maskTracking,
+    trackedMasks,
+    clearTrackedMask,
+    trackSubject,
     paletteStudioOpen,
     toasts,
     setMode,

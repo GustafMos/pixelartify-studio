@@ -17,7 +17,7 @@ import {
   spritesheetMetadata,
 } from '../../../core';
 import type { PixelImage } from '../../../core/types';
-import { applyItemAlphaCuts, mediaAtPort } from '../../../core/graph';
+import { applyTrackedAlphaCuts, mediaAtPort } from '../../../core/graph';
 import { useStudio } from '../../store';
 import {
   formatFilename,
@@ -54,6 +54,7 @@ export function OutputPanel({ node }: { node: GraphNode }): React.ReactElement {
     exportProgress,
     notify,
     presets,
+    trackedMasks,
   } = useStudio();
   const output: OutputSettings = {
     ...DEFAULT_OUTPUT,
@@ -109,9 +110,10 @@ export function OutputPanel({ node }: { node: GraphNode }): React.ReactElement {
     writerRef.current = null;
   };
 
-  const renderItem = (item: GraphMediaItem, image = item.source) => {
+  const renderItem = (item: GraphMediaItem, image = item.source, time = 0) => {
     const settings = { ...settingsFromItem(item), output, video };
-    const input = image === item.source ? image : applyItemAlphaCuts(item, image);
+    const input =
+      image === item.source ? image : applyTrackedAlphaCuts(item, image, time, trackedMasks);
     return {
       result: renderPixelArt({ image: input, masks: item.masks, settings }, { upscale: true }),
       settings,
@@ -280,7 +282,7 @@ export function OutputPanel({ node }: { node: GraphNode }): React.ReactElement {
         async (frame, i, timestamp) => {
           index = i;
           setProgress(`Pixelating frame ${i + 1}`);
-          const { result } = renderItem(item, frame);
+          const { result } = renderItem(item, frame, timestamp);
           if (wantsVideo && !writerState.writer) {
             const newWriter = new VideoWriter({
               width: result.art.width,
@@ -415,7 +417,9 @@ export function OutputPanel({ node }: { node: GraphNode }): React.ReactElement {
             setProgress(`Rendering print frame ${i + 1}`);
             const result = renderPixelArt(
               {
-                image: videoItem ? applyItemAlphaCuts(videoItem, frame) : frame,
+                image: videoItem
+                  ? applyTrackedAlphaCuts(videoItem, frame, i / Math.max(0.1, video.fps), trackedMasks)
+                  : frame,
                 masks: videoItem?.masks,
                 settings: printSettings,
               },

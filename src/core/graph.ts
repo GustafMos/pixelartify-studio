@@ -275,6 +275,8 @@ export interface GraphMediaItem {
   masks: Record<string, MaskData>;
   /** Mask IDs applied to the media output by "only extracted" nodes. */
   alphaCutMaskIds?: string[];
+  /** Cache keys (`node:asset:mask`) for tracked alpha cuts. */
+  alphaCutKeys?: string[];
   layers: LayerSettings[];
   preprocessOps: PreprocessOp[];
   latePreprocessOps: PreprocessOp[];
@@ -851,6 +853,9 @@ function evaluateNode(
           alphaCutMaskIds: onlyExtracted
             ? [...(item.alphaCutMaskIds ?? []), maskId]
             : item.alphaCutMaskIds,
+          alphaCutKeys: onlyExtracted
+            ? [...(item.alphaCutKeys ?? []), `${node.id}:${item.assetId}:${maskId}`]
+            : item.alphaCutKeys,
           extraction: deepClone(extraction),
         };
       });
@@ -982,6 +987,37 @@ export function applyItemAlphaCuts(item: GraphMediaItem, image: PixelImage): Pix
   const out = cloneImage(image);
   for (const id of ids) {
     const mask = item.masks[id];
+    if (mask) multiplyAlpha(out, mask);
+  }
+  return out;
+}
+
+export interface TrackedMaskSequence {
+  /** Frames per second used when the sequence was generated. */
+  fps: number;
+  /** Masks at the tracking resolution, in time order. */
+  masks: MaskData[];
+}
+
+/** Apply per-frame tracked masks when rendering a live/exported video frame. */
+export function applyTrackedAlphaCuts(
+  item: GraphMediaItem,
+  image: PixelImage,
+  time: number,
+  tracked: Record<string, TrackedMaskSequence> | undefined,
+): PixelImage {
+  const keys = item.alphaCutKeys ?? [];
+  if (keys.length === 0) return applyItemAlphaCuts(item, image);
+  const out = cloneImage(image);
+  for (const key of keys) {
+    const maskId = key.split(':')[2] ?? '';
+    const seq = tracked?.[key];
+    let mask: MaskData | undefined;
+    if (seq && seq.masks.length > 0) {
+      const index = Math.max(0, Math.min(seq.masks.length - 1, Math.round(time * seq.fps)));
+      mask = seq.masks[index];
+    }
+    if (!mask) mask = item.masks[maskId];
     if (mask) multiplyAlpha(out, mask);
   }
   return out;
@@ -1125,6 +1161,7 @@ function makeItem(node: GraphNode, asset: GraphAsset): GraphMediaItem {
     sourceHeight: asset.height,
     masks: {},
     alphaCutMaskIds: [],
+    alphaCutKeys: [],
     layers: [],
     preprocessOps: [],
     latePreprocessOps: [],
