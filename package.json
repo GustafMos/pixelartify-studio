@@ -1,0 +1,60 @@
+{
+  "name": "pixelartify-studio",
+  "version": "0.1.0",
+  "private": false,
+  "description": "PixelArtify Studio â€” edge-aware, resolution-independent pixel art conversion with palettes, dithering, layers and video.",
+  "bin": {
+    "pixelartify": "dist-cli/pixelartify.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "type": "module",
+  "license": "MIT",
+  "author": "PixelArtify Studio contributors",
+  "homepage": "https://github.com/GustafMos/pixelartify-studio",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/GustafMos/pixelartify-studio.git"
+  },
+  "keywords": [
+    "pixel-art",
+    "dithering",
+    "palette",
+    "image-processing",
+    "video",
+    "spritesheet",
+    "game-dev"
+  ],
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "build:cli": "esbuild src/cli/index.ts --bundle --platform=node --format=esm --outfile=dist-cli/pixelartify.mjs --external:sharp --external:@ffmpeg-installer/ffmpeg",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit --pretty",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "cli": "tsx src/cli/index.ts",
+    "check": "tsc --noEmit && vitest run"
+  },
+  "dependencies": {
+    "fflate": "^0.8.2",
+    "mediabunny": "^1.65.2",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0",
+    "sharp": "^0.35.5"
+  },
+  "optionalDependencies": {
+    "@ffmpeg-installer/ffmpeg": "^1.1.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "@types/react": "^19.1.0",
+    "@types/react-dom": "^19.1.0",
+    "@vitejs/plugin-react": "^5.0.0",
+    "tsx": "^4.20.0",
+    "typescript": "^5.9.0",
+    "vite": "^7.1.0",
+    "vitest": "^3.2.0"
+  }
+}

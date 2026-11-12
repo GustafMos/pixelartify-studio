@@ -1,0 +1,430 @@
+import React, { useEffect, useId, useState } from 'react';
+import { Icon, type IconName } from './icons';
+
+export function Section({
+  title,
+  subtitle,
+  children,
+  defaultOpen = true,
+  right,
+  className = '',
+}: {
+  title: string;
+  subtitle?: string;
+  children: React.ReactNode;
+  defaultOpen?: boolean;
+  right?: React.ReactNode;
+  className?: string;
+}): React.ReactElement {
+  const [open, setOpen] = useState(defaultOpen);
+  return (
+    <section className={`section ${open ? 'is-open' : ''} ${className}`}>
+      <header className="section-head">
+        <button type="button" className="section-toggle" onClick={() => setOpen((v) => !v)}>
+          <Icon name="chevron" size={14} className="section-chevron" />
+          <span className="section-title">{title}</span>
+        </button>
+        {right ? <div className="section-right">{right}</div> : null}
+      </header>
+      {open ? (
+        <div className="section-body">
+          {subtitle ? <p className="section-subtitle">{subtitle}</p> : null}
+          {children}
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
+export function Slider({
+  label,
+  value,
+  min,
+  max,
+  step = 1,
+  onChange,
+  unit,
+  hint,
+  disabled,
+  format,
+}: {
+  label: string;
+  value: number;
+  min: number;
+  max: number;
+  step?: number;
+  onChange: (value: number) => void;
+  unit?: string;
+  hint?: string;
+  disabled?: boolean;
+  format?: (value: number) => string;
+}): React.ReactElement {
+  const decimals = step < 0.01 ? 3 : step < 1 ? 2 : 0;
+  const display = format ? format(value) : Number(value).toFixed(decimals);
+  return (
+    <div className={`control slider-control ${disabled ? 'is-disabled' : ''}`} title={hint}>
+      <div className="control-row">
+        <label className="control-label">{label}</label>
+        <span className="control-value">
+          {display}
+          {unit ? <em>{unit}</em> : null}
+        </span>
+      </div>
+      <input
+        type="range"
+        min={min}
+        max={max}
+        step={step}
+        value={value}
+        disabled={disabled}
+        onChange={(e) => onChange(Number(e.target.value))}
+        aria-label={label}
+      />
+    </div>
+  );
+}
+
+export function NumberField({
+  label,
+  value,
+  min,
+  max,
+  step = 1,
+  onChange,
+  unit,
+  hint,
+  disabled,
+}: {
+  label: string;
+  value: number;
+  min?: number;
+  max?: number;
+  step?: number;
+  onChange: (value: number) => void;
+  unit?: string;
+  hint?: string;
+  disabled?: boolean;
+}): React.ReactElement {
+  return (
+    <div className={`control number-control ${disabled ? 'is-disabled' : ''}`} title={hint}>
+      <label className="control-label">{label}</label>
+      <div className="number-wrap">
+        <input
+          type="number"
+          value={Number.isFinite(value) ? value : 0}
+          min={min}
+          max={max}
+          step={step}
+          disabled={disabled}
+          onChange={(e) => {
+            const n = Number(e.target.value);
+            if (Number.isFinite(n)) onChange(n);
+          }}
+        />
+        {unit ? <span className="unit">{unit}</span> : null}
+      </div>
+    </div>
+  );
+}
+
+export interface SelectOption<T extends string = string> {
+  value: T;
+  label: string;
+  hint?: string;
+}
+
+export function SelectField<T extends string = string>({
+  label,
+  value,
+  options,
+  onChange,
+  hint,
+  disabled,
+}: {
+  label: string;
+  value: T;
+  options: SelectOption<T>[];
+  onChange: (value: T) => void;
+  hint?: string;
+  disabled?: boolean;
+}): React.ReactElement {
+  return (
+    <div className={`control select-control ${disabled ? 'is-disabled' : ''}`}>
+      <label className="control-label">{label}</label>
+      <select value={value} onChange={(e) => onChange(e.target.value as T)} disabled={disabled} title={hint}>
+        {options.map((o) => (
+          <option value={o.value} key={o.value}>
+            {o.label}
+          </option>
+        ))}
+      </select>
+    </div>
+  );
+}
+
+export function Toggle({
+  label,
+  checked,
+  onChange,
+  hint,
+}: {
+  label: string;
+  checked: boolean;
+  onChange: (checked: boolean) => void;
+  hint?: string;
+}): React.ReactElement {
+  return (
+    <label className="toggle-control" title={hint}>
+      <span className="control-label">{label}</span>
+      <input type="checkbox" checked={checked} onChange={(e) => onChange(e.target.checked)} />
+      <span className="switch" aria-hidden="true">
+        <span className="knob" />
+      </span>
+    </label>
+  );
+}
+
+export function Segmented<T extends string>({
+  value,
+  options,
+  onChange,
+  label,
+}: {
+  value: T;
+  options: Array<{ value: T; label: string; hint?: string }>;
+  onChange: (value: T) => void;
+  label?: string;
+}): React.ReactElement {
+  return (
+    <div className="segmented-wrap">
+      {label ? <span className="control-label">{label}</span> : null}
+      <div className="segmented" role="group" aria-label={label}>
+        {options.map((o) => (
+          <button
+            key={o.value}
+            type="button"
+            className={o.value === value ? 'is-active' : ''}
+            onClick={() => onChange(o.value)}
+            title={o.hint}
+          >
+            {o.label}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+export function ColorField({
+  label,
+  value,
+  onChange,
+  hint,
+}: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  hint?: string;
+}): React.ReactElement {
+  const [text, setText] = useState(value);
+  useEffect(() => setText(value), [value]);
+  return (
+    <div className="control color-control" title={hint}>
+      <label className="control-label">{label}</label>
+      <div className="color-wrap">
+        <input type="color" value={value} onChange={(e) => onChange(e.target.value)} aria-label={label} />
+        <input
+          type="text"
+          value={text}
+          spellCheck={false}
+          onChange={(e) => {
+            setText(e.target.value);
+            if (/^#[0-9a-f]{6}$/i.test(e.target.value.trim())) onChange(e.target.value.trim());
+          }}
+          onBlur={() => {
+            if (!/^#[0-9a-f]{6}$/i.test(text.trim())) setText(value);
+          }}
+        />
+      </div>
+    </div>
+  );
+}
+
+export function TextField({
+  label,
+  value,
+  onChange,
+  placeholder,
+  hint,
+  mono,
+}: {
+  label?: string;
+  value: string;
+  onChange: (value: string) => void;
+  placeholder?: string;
+  hint?: string;
+  mono?: boolean;
+}): React.ReactElement {
+  return (
+    <div className="control text-control">
+      {label ? <label className="control-label">{label}</label> : null}
+      <input
+        type="text"
+        value={value}
+        placeholder={placeholder}
+        title={hint}
+        spellCheck={false}
+        className={mono ? 'mono' : ''}
+        onChange={(e) => onChange(e.target.value)}
+      />
+    </div>
+  );
+}
+
+export function TextArea({
+  label,
+  value,
+  onChange,
+  rows = 3,
+  placeholder,
+  hint,
+}: {
+  label?: string;
+  value: string;
+  onChange: (value: string) => void;
+  rows?: number;
+  placeholder?: string;
+  hint?: string;
+}): React.ReactElement {
+  return (
+    <div className="control text-control">
+      {label ? <label className="control-label">{label}</label> : null}
+      <textarea
+        value={value}
+        rows={rows}
+        placeholder={placeholder}
+        title={hint}
+        spellCheck={false}
+        onChange={(e) => onChange(e.target.value)}
+      />
+    </div>
+  );
+}
+
+export function IconButton({
+  icon,
+  label,
+  onClick,
+  active,
+  danger,
+  disabled,
+  size,
+}: {
+  icon: IconName;
+  label: string;
+  onClick: (e: React.MouseEvent) => void;
+  active?: boolean;
+  danger?: boolean;
+  disabled?: boolean;
+  size?: number;
+}): React.ReactElement {
+  return (
+    <button
+      type="button"
+      className={`icon-btn ${active ? 'is-active' : ''} ${danger ? 'is-danger' : ''}`}
+      onClick={onClick}
+      title={label}
+      aria-label={label}
+      disabled={disabled}
+    >
+      <Icon name={icon} size={size ?? 17} />
+    </button>
+  );
+}
+
+export function Badge({
+  children,
+  tone = 'neutral',
+}: {
+  children: React.ReactNode;
+  tone?: 'neutral' | 'accent' | 'success' | 'warn' | 'danger';
+}): React.ReactElement {
+  return <span className={`badge badge-${tone}`}>{children}</span>;
+}
+
+export function Spinner({ label }: { label?: string }): React.ReactElement {
+  return (
+    <span className="spinner-wrap">
+      <span className="spinner" aria-hidden="true" />
+      {label ? <span>{label}</span> : null}
+    </span>
+  );
+}
+
+export function EmptyState({
+  icon,
+  title,
+  children,
+}: {
+  icon: IconName;
+  title: string;
+  children?: React.ReactNode;
+}): React.ReactElement {
+  return (
+    <div className="empty-state">
+      <span className="empty-icon">
+        <Icon name={icon} size={28} />
+      </span>
+      <strong>{title}</strong>
+      {children ? <div className="empty-copy">{children}</div> : null}
+    </div>
+  );
+}
+
+export function Modal({
+  open,
+  title,
+  subtitle,
+  onClose,
+  children,
+  footer,
+  wide,
+}: {
+  open: boolean;
+  title: string;
+  subtitle?: string;
+  onClose: () => void;
+  children: React.ReactNode;
+  footer?: React.ReactNode;
+  wide?: boolean;
+}): React.ReactElement | null {
+  const titleId = useId();
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent): void => {
+      if (e.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [open, onClose]);
+  if (!open) return null;
+  return (
+    <div className="modal-backdrop" role="presentation" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
+      <div className={`modal ${wide ? 'modal-wide' : ''}`} role="dialog" aria-modal="true" aria-labelledby={titleId}>
+        <header className="modal-head">
+          <div>
+            <h2 id={titleId}>{title}</h2>
+            {subtitle ? <p>{subtitle}</p> : null}
+          </div>
+          <IconButton icon="close" label="Close" onClick={onClose} />
+        </header>
+        <div className="modal-body">{children}</div>
+        {footer ? <footer className="modal-foot">{footer}</footer> : null}
+      </div>
+    </div>
+  );
+}
+
+export function Divider(): React.ReactElement {
+  return <div className="divider" />;
+}
