@@ -2,7 +2,13 @@ import React from 'react';
 import { createRoot } from 'react-dom/client';
 import { StudioProvider } from './store';
 import { App } from './App';
+import { setGlobalPixelator } from '../core/pipeline';
+import { gpuPixelate } from './gpuPixelate';
 import './styles.css';
+
+// Use the WebGL2 sampler when available; it falls back to the CPU backend
+// automatically inside the pipeline.
+setGlobalPixelator(gpuPixelate);
 
 class ErrorBoundary extends React.Component<
   { children: React.ReactNode },

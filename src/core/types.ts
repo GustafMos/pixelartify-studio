@@ -43,6 +43,7 @@ export interface ResolutionSettings {
 }
 
 export type PreprocessType =
+  | 'colorCorrect'
   | 'painterly'
   | 'oil'
   | 'watercolor'
@@ -53,6 +54,17 @@ export type PreprocessType =
   | 'sharpen'
   | 'bloom'
   | 'pixelBlur';
+
+export interface ColorCorrectionSettings {
+  exposure: number;
+  contrast: number;
+  brightness: number;
+  saturation: number;
+  gamma: number;
+  hueShift: number;
+  temperature: number;
+  tint: number;
+}
 
 export interface PreprocessOp {
   id: string;
@@ -276,6 +288,7 @@ export type GraphNodeType =
   | 'crop'
   | 'resize'
   | 'channels'
+  | 'color'
   | 'preprocess'
   | 'pixelate'
   | 'palette'

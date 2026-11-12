@@ -32,52 +32,54 @@ export function buildEdgeMap(img: PixelImage, options: EdgeOptions): EdgeMap {
 
   const gx = new Float32Array(w * h);
   const gy = new Float32Array(w * h);
+  const magArr = new Float32Array(w * h);
+  const chroma = options.chroma === true;
   let maxMag = 0;
 
   for (let y = 0; y < h; y++) {
     const ym = y > 0 ? y - 1 : 0;
     const yp = y < h - 1 ? y + 1 : h - 1;
+    const row = y * w;
+    const rowUp = ym * w;
+    const rowDown = yp * w;
     for (let x = 0; x < w; x++) {
       const xm = x > 0 ? x - 1 : 0;
       const xp = x < w - 1 ? x + 1 : w - 1;
-      const tl = gray[ym * w + xm];
-      const tc = gray[ym * w + x];
-      const tr = gray[ym * w + xp];
-      const ml = gray[y * w + xm];
-      const mr = gray[y * w + xp];
-      const bl = gray[yp * w + xm];
-      const bc = gray[yp * w + x];
-      const br = gray[yp * w + xp];
+      const tl = gray[rowUp + xm];
+      const tc = gray[rowUp + x];
+      const tr = gray[rowUp + xp];
+      const ml = gray[row + xm];
+      const mr = gray[row + xp];
+      const bl = gray[rowDown + xm];
+      const bc = gray[rowDown + x];
+      const br = gray[rowDown + xp];
 
       let dx = -tl + tr - 2 * ml + 2 * mr - bl + br;
       let dy = -tl - 2 * tc - tr + bl + 2 * bc + br;
 
-      if (options.chroma) {
+      if (chroma) {
         // Add a chroma gradient term so saturated edges survive.
-        const i = (y * w + x) * 4;
-        const ar = data[i];
-        const ag = data[i + 1];
-        const ab = data[i + 2];
-        const iL = (y * w + (x > 0 ? x - 1 : x)) * 4;
-        const iR = (y * w + (x < w - 1 ? x + 1 : x)) * 4;
-        const iU = ((y > 0 ? y - 1 : y) * w + x) * 4;
-        const iD = ((y < h - 1 ? y + 1 : y) * w + x) * 4;
-        const dr = data[iR] - data[iL];
-        const dg = data[iR + 1] - data[iL + 1];
-        const db = data[iR + 2] - data[iL + 2];
-        const ur = data[iD] - data[iU];
-        const ug = data[iD + 1] - data[iU + 1];
-        const ub = data[iD + 2] - data[iU + 2];
-        dx += (Math.abs(dr) + Math.abs(dg) + Math.abs(db)) * 0.15;
-        dy += (Math.abs(ur) + Math.abs(ug) + Math.abs(ub)) * 0.15;
-        void ar;
-        void ag;
-        void ab;
+        const iL = (row + xm) * 4;
+        const iR = (row + xp) * 4;
+        const iU = (rowUp + x) * 4;
+        const iD = (rowDown + x) * 4;
+        dx +=
+          (Math.abs(data[iR] - data[iL]) +
+            Math.abs(data[iR + 1] - data[iL + 1]) +
+            Math.abs(data[iR + 2] - data[iL + 2])) *
+          0.15;
+        dy +=
+          (Math.abs(data[iD] - data[iU]) +
+            Math.abs(data[iD + 1] - data[iU + 1]) +
+            Math.abs(data[iD + 2] - data[iU + 2])) *
+          0.15;
       }
 
-      gx[y * w + x] = dx;
-      gy[y * w + x] = dy;
+      const p = row + x;
+      gx[p] = dx;
+      gy[p] = dy;
       const mag = Math.sqrt(dx * dx + dy * dy);
+      magArr[p] = mag;
       if (mag > maxMag) maxMag = mag;
     }
   }
@@ -85,21 +87,23 @@ export function buildEdgeMap(img: PixelImage, options: EdgeOptions): EdgeMap {
   // Non-maximum suppression along the gradient direction.
   const nms = new Float32Array(w * h);
   if (maxMag > 0) {
+    const invMax = 1 / maxMag;
     for (let y = 1; y < h - 1; y++) {
       for (let x = 1; x < w - 1; x++) {
         const p = y * w + x;
-        const dx = gx[p];
-        const dy = gy[p];
-        const mag = Math.sqrt(dx * dx + dy * dy) / maxMag;
+        const raw = magArr[p];
+        const mag = raw * invMax;
         if (mag < 0.02) continue;
 
+        const dx = gx[p];
+        const dy = gy[p];
         const nx = Math.abs(dx) >= Math.abs(dy) ? 1 : 0;
         const ny = 1 - nx;
         const sx = dx >= 0 ? nx : -nx;
         const sy = dy >= 0 ? ny : -ny;
 
-        const n1 = Math.sqrt(gx[(y - sy) * w + (x - sx)] ** 2 + gy[(y - sy) * w + (x - sx)] ** 2) / maxMag;
-        const n2 = Math.sqrt(gx[(y + sy) * w + (x + sx)] ** 2 + gy[(y + sy) * w + (x + sx)] ** 2) / maxMag;
+        const n1 = magArr[(y - sy) * w + (x - sx)] * invMax;
+        const n2 = magArr[(y + sy) * w + (x + sx)] * invMax;
         if (mag >= n1 && mag >= n2) nms[p] = mag;
       }
     }

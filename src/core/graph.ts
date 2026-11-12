@@ -51,6 +51,7 @@ import {
   type ResizeFilter,
 } from './image';
 import { DEFAULT_CHANNELS, applyChannels, type ChannelSettings } from './channels';
+import { DEFAULT_COLOR_CORRECTION } from './preprocess';
 
 export type SocketType = 'media' | 'mask' | 'palette';
 
@@ -100,6 +101,16 @@ export const NODE_DEFS: Record<GraphNodeType, NodeDefinition> = {
     description:
       'Resize with nearest, bilinear, box, bicubic or Lanczos3 filtering. Premultiplied alpha is retained.',
     accent: '#2ec4b6',
+    inputs: [{ id: 'media', label: 'Media', type: 'media' }],
+    outputs: [{ id: 'media', label: 'Media', type: 'media' }],
+  },
+  color: {
+    type: 'color',
+    title: 'Color correct',
+    category: 'colour',
+    description:
+      'Exposure, contrast, brightness, saturation, gamma, hue, temperature and tint. Alpha is retained.',
+    accent: '#ffb703',
     inputs: [{ id: 'media', label: 'Media', type: 'media' }],
     outputs: [{ id: 'media', label: 'Media', type: 'media' }],
   },
@@ -341,6 +352,8 @@ export function nodeParams(type: GraphNodeType, settings?: PixelArtifySettings):
       };
     case 'channels':
       return { ...deepClone(DEFAULT_CHANNELS) };
+    case 'color':
+      return { color: deepClone(DEFAULT_COLOR_CORRECTION) };
     case 'preprocess':
       return { ops: deepClone(s.preprocess.ops) };
     case 'pixelate':
@@ -691,6 +704,28 @@ function evaluateNode(
           items: media.items.map((item) => ({
             ...item,
             source: applyChannels(item.source, { ...DEFAULT_CHANNELS, ...settings }),
+          })),
+        },
+      };
+    }
+    case 'color': {
+      if (!media) return null;
+      const color = {
+        ...deepClone(DEFAULT_COLOR_CORRECTION),
+        ...(node.params.color as Partial<typeof DEFAULT_COLOR_CORRECTION> | undefined),
+      };
+      const op: PreprocessOp = {
+        id: `color-${node.id}`,
+        type: 'colorCorrect',
+        enabled: true,
+        params: { ...color },
+      };
+      return {
+        media: {
+          type: 'media',
+          items: media.items.map((item) => ({
+            ...item,
+            preprocessOps: [...item.preprocessOps, op],
           })),
         },
       };
@@ -1130,6 +1165,7 @@ export function stopStageForNode(type: GraphNodeType): 'source' | 'preprocess' |
     case 'input':
       return 'source';
     case 'preprocess':
+    case 'color':
       return 'preprocess';
     case 'pixelate':
       return 'pixelate';

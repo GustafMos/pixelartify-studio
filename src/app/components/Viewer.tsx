@@ -3,6 +3,7 @@ import { createMask, featherMask, invertMask } from '../../core/image';
 import type { GraphNode, MaskData } from '../../core/types';
 import { useStudio } from '../store';
 import { pixelImageToDataUrl } from '../io';
+import { GPU_MIN_PIXELS, gpuAvailable } from '../gpuPixelate';
 import { Icon } from './icons';
 import { Badge, IconButton, Segmented, Slider, Spinner } from './controls';
 
@@ -51,6 +52,8 @@ export function Viewer({ resizeKey }: { resizeKey?: number | string } = {}): Rea
   const artW = art?.width ?? 1;
   const artH = art?.height ?? 1;
   const artUrl = useMemo(() => (art ? pixelImageToDataUrl(art) : null), [art]);
+  const gpuSampler = useMemo(() => gpuAvailable(), []);
+  const gpuActive = gpuSampler && artW * artH >= GPU_MIN_PIXELS;
 
   const fit = useCallback(
     (size?: { width: number; height: number }) => {
@@ -276,6 +279,9 @@ export function Viewer({ resizeKey }: { resizeKey?: number | string } = {}): Rea
               {preview?.stats.edgeAware ? ' · edge-aware' : ''}
             </span>
           ) : null}
+          <Badge tone={gpuActive ? 'success' : 'neutral'}>
+            {gpuActive ? 'GPU sampler' : gpuSampler ? 'CPU sampler (small)' : 'CPU sampler'}
+          </Badge>
         </div>
         <div className="viewer-toolbar-right">
           <IconButton

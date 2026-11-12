@@ -132,6 +132,7 @@ interface StudioContextValue {
   moveNode: (id: string, x: number, y: number) => void;
   addEdge: (fromNode: string, fromPort: string, toNode: string, toPort: string) => void;
   deleteEdge: (edgeId: string) => void;
+  insertNodeOnEdge: (nodeId: string, edgeId: string) => boolean;
   addAssets: (nodeId: string, files: File[]) => Promise<void>;
   importFiles: (nodeId: string, files: File[]) => Promise<void>;
   removeAsset: (nodeId: string, assetId: string) => void;
@@ -559,6 +560,57 @@ export function StudioProvider({ children }: { children: React.ReactNode }): Rea
   const deleteEdge = useCallback((edgeId: string) => {
     mutateGraph((g) => ({ ...g, edges: g.edges.filter((e) => e.id !== edgeId) }));
   }, [mutateGraph]);
+
+  const insertNodeOnEdge = useCallback(
+    (nodeId: string, edgeId: string): boolean => {
+      const edge = graph.edges.find((e) => e.id === edgeId);
+      if (!edge) return false;
+      if (edge.fromNode === nodeId || edge.toNode === nodeId) return false;
+      const source = graph.nodes.find((n) => n.id === edge.fromNode);
+      const target = graph.nodes.find((n) => n.id === edge.toNode);
+      const moving = graph.nodes.find((n) => n.id === nodeId);
+      if (!source || !target || !moving) return false;
+
+      const edgeType = NODE_DEFS[source.type].outputs.find((p) => p.id === edge.fromPort)?.type;
+      if (!edgeType) return false;
+      const def = NODE_DEFS[moving.type];
+      const input = def.inputs.find((p) => p.type === edgeType);
+      const output = def.outputs.find((p) => p.type === edgeType);
+      if (!input || !output) return false;
+
+      const existingInput = graph.edges.some(
+        (e) => e.toNode === nodeId && e.toPort === input.id,
+      );
+      if (existingInput && !input.multiple) return false;
+
+      const newEdges = graph.edges.filter((e) => e.id !== edgeId);
+      newEdges.push(
+        {
+          id: uid('edge'),
+          fromNode: source.id,
+          fromPort: edge.fromPort,
+          toNode: nodeId,
+          toPort: input.id,
+        },
+        {
+          id: uid('edge'),
+          fromNode: nodeId,
+          fromPort: output.id,
+          toNode: target.id,
+          toPort: edge.toPort,
+        },
+      );
+      const candidate: PipelineGraph = { ...graph, edges: newEdges };
+      if (validateGraph(candidate).some((error) => /cycle/i.test(error.message))) {
+        notify('Inserting there would create a cycle.', 'error');
+        return false;
+      }
+      mutateGraph(() => candidate);
+      notify(`Inserted “${moving.title}” into the connection.`, 'success');
+      return true;
+    },
+    [graph, mutateGraph, notify],
+  );
 
   const addAssetsInternal = useCallback(async (nodeId: string, files: File[]) => {
     const supported = files.filter((f) => fileKind(f) !== null);
@@ -1012,6 +1064,7 @@ export function StudioProvider({ children }: { children: React.ReactNode }): Rea
     moveNode,
     addEdge,
     deleteEdge,
+    insertNodeOnEdge,
     addAssets: addAssetsInternal,
     importFiles,
     removeAsset,

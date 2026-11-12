@@ -33,6 +33,7 @@ type IconName =
   | 'film'
   | 'sheet'
   | 'split'
+  | 'sliders'
   | 'node'
   | 'link'
   | 'brush'
@@ -165,6 +166,14 @@ const PATHS: Record<IconName, React.ReactNode> = {
       <rect x="3" y="3" width="18" height="8" rx="1.5" />
       <rect x="3" y="13" width="18" height="8" rx="1.5" />
       <path d="M3 12h18" />
+    </>
+  ),
+  sliders: (
+    <>
+      <path d="M4 6h16M4 12h16M4 18h16" />
+      <circle cx="9" cy="6" r="2" />
+      <circle cx="15" cy="12" r="2" />
+      <circle cx="8" cy="18" r="2" />
     </>
   ),
   node: (

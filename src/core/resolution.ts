@@ -112,11 +112,12 @@ export function computeWorkingSize(
   maxLong = 2048,
 ): { width: number; height: number; supersample: number } {
   const long = Math.max(artWidth, artHeight);
-  let factor = 4;
-  if (long <= 192) factor = 6;
-  else if (long <= 384) factor = 5;
-  else if (long <= 768) factor = 3;
-  else factor = 2;
+  // Supersampling only needs to resolve the sampling window; beyond ~2× the
+  // art size it adds cost without visible detail. Small art keeps a higher
+  // factor because the absolute pixel count stays cheap.
+  let factor = 2;
+  if (long <= 192) factor = 5;
+  else if (long <= 384) factor = 4;
 
   let workW = artWidth * factor;
   let workH = artHeight * factor;

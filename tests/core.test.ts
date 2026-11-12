@@ -7,6 +7,7 @@ import {
   DEFAULT_PALETTE,
   DEFAULT_PIXELATE,
   applyChannels,
+  applyColorCorrection,
   applyDither,
   computeArtSize,
   computeWorkingSize,
@@ -119,6 +120,35 @@ describe('colour', () => {
       const colors = generateHarmony({ base: '#3a86ff', rule, count: 5, saturation: 1, lightness: 1, spread: 1 });
       expect(colors).toHaveLength(5);
       for (const c of colors) expect(c).toMatch(/^#[0-9a-f]{6}$/);
+    }
+  });
+
+  it('colour-corrects contrast while retaining alpha and dimensions', () => {
+    const img = gradient(32, 24, 128);
+    const flat = applyColorCorrection(img, {});
+    expect(Array.from(flat.data)).toEqual(Array.from(img.data));
+
+    const punchy = applyColorCorrection(img, { contrast: 1.5, saturation: 1.3 });
+    expect(punchy.width).toBe(img.width);
+    expect(punchy.height).toBe(img.height);
+    for (let i = 3; i < punchy.data.length; i += 4) expect(punchy.data[i]).toBe(128);
+    // Contrast must spread values away from mid-grey rather than collapse them.
+    const spread = (data: Uint8ClampedArray): number => {
+      let min = 255;
+      let max = 0;
+      for (let i = 0; i < data.length; i += 4) {
+        min = Math.min(min, data[i]);
+        max = Math.max(max, data[i]);
+      }
+      return max - min;
+    };
+    expect(spread(punchy.data)).toBeGreaterThanOrEqual(spread(img.data));
+    expect(Array.from(punchy.data)).not.toEqual(Array.from(img.data));
+
+    const grey = applyColorCorrection(img, { saturation: 0 });
+    for (let i = 0; i < grey.data.length; i += 4) {
+      expect(Math.abs(grey.data[i] - grey.data[i + 1])).toBeLessThanOrEqual(1);
+      expect(Math.abs(grey.data[i + 1] - grey.data[i + 2])).toBeLessThanOrEqual(1);
     }
   });
 });

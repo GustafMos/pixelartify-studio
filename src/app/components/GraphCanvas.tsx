@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { NODE_DEFS } from '../../core/graph';
-import type { GraphNode, GraphNodeType } from '../../core/types';
+import type { GraphEdge, GraphNode, GraphNodeType } from '../../core/types';
 import { DITHER_BY_ID } from '../../core/dither';
 import { pixelImageToDataUrl } from '../io';
 import { useStudio } from '../store';
@@ -21,6 +21,7 @@ const TYPE_ICON: Record<GraphNodeType, IconName> = {
   crop: 'fit',
   resize: 'zoomIn',
   channels: 'layers',
+  color: 'sliders',
   preprocess: 'wand',
   pixelate: 'grid',
   palette: 'palette',
@@ -57,6 +58,10 @@ function summaryFor(node: GraphNode, assetCount: number): string {
     }
     case 'channels': {
       return `${String(p.operation ?? 'extract')} · ${String(p.channel ?? 'luma')}${p.keepAlpha ? ' · alpha' : ''}`;
+    }
+    case 'color': {
+      const c = p.color as { contrast?: number; saturation?: number; temperature?: number } | undefined;
+      return `contrast ${Number(c?.contrast ?? 1).toFixed(2)} · sat ${Number(c?.saturation ?? 1).toFixed(2)}`;
     }
     case 'preprocess': {
       const ops = Array.isArray(p.ops) ? p.ops : [];
@@ -137,6 +142,48 @@ interface LinkState {
   pending: boolean;
 }
 
+interface EdgeGeometry {
+  x1: number;
+  y1: number;
+  x2: number;
+  y2: number;
+  control: number;
+}
+
+function edgeGeometry(
+  edge: GraphEdge,
+  nodes: GraphNode[],
+  positions: Map<string, { x: number; y: number }>,
+): EdgeGeometry | null {
+  const from = nodes.find((n) => n.id === edge.fromNode);
+  const to = nodes.find((n) => n.id === edge.toNode);
+  if (!from || !to) return null;
+  const fp = positions.get(from.id);
+  const tp = positions.get(to.id);
+  if (!fp || !tp) return null;
+  const fromDef = NODE_DEFS[from.type];
+  const outIdx = fromDef.outputs.findIndex((p) => p.id === edge.fromPort);
+  const inIdx = NODE_DEFS[to.type].inputs.findIndex((p) => p.id === edge.toPort);
+  if (outIdx < 0 || inIdx < 0) return null;
+  return {
+    x1: fp.x + NODE_WIDTH - PORT_DOT_INSET,
+    y1: fp.y + HEADER_H + PORT_START + outIdx * PORT_STEP + PORT_ROW_CENTER,
+    x2: tp.x + PORT_DOT_INSET,
+    y2: tp.y + HEADER_H + PORT_START + inIdx * PORT_STEP + PORT_ROW_CENTER,
+    control: Math.max(50, Math.abs(tp.x - fp.x) * 0.45),
+  };
+}
+
+function edgePoint(geometry: EdgeGeometry, t: number): { x: number; y: number } {
+  const mt = 1 - t;
+  const c1 = geometry.x1 + geometry.control;
+  const c2 = geometry.x2 - geometry.control;
+  return {
+    x: mt * mt * mt * geometry.x1 + 3 * mt * mt * t * c1 + 3 * mt * t * t * c2 + t * t * t * geometry.x2,
+    y: mt * mt * mt * geometry.y1 + 3 * mt * mt * t * geometry.y1 + 3 * mt * t * t * geometry.y2 + t * t * t * geometry.y2,
+  };
+}
+
 export function GraphCanvas(): React.ReactElement {
   const {
     graph,
@@ -149,6 +196,7 @@ export function GraphCanvas(): React.ReactElement {
     moveNode,
     addEdge,
     deleteEdge,
+    insertNodeOnEdge,
     addNode,
     duplicateNode,
     deleteNode,
@@ -165,6 +213,7 @@ export function GraphCanvas(): React.ReactElement {
   const [addOpen, setAddOpen] = useState(false);
   const [addSearch, setAddSearch] = useState('');
   const [hoverEdgeId, setHoverEdgeId] = useState<string | null>(null);
+  const [insertEdgeId, setInsertEdgeId] = useState<string | null>(null);
   const userMovedRef = useRef(false);
 
   const setLinkState = useCallback((next: LinkState | null) => {
@@ -183,6 +232,70 @@ export function GraphCanvas(): React.ReactElement {
     }
     return map;
   }, [graph.nodes, drag]);
+
+  const findInsertEdge = useCallback(
+    (nodeId: string, pos: { x: number; y: number }): string | null => {
+      const moving = graph.nodes.find((n) => n.id === nodeId);
+      if (!moving) return null;
+      const def = NODE_DEFS[moving.type];
+      if (def.inputs.length === 0 || def.outputs.length === 0) return null;
+
+      const positions = new Map(effectivePositions);
+      positions.set(nodeId, pos);
+      const height = nodeHeight(moving, false);
+      const left = pos.x - 10;
+      const top = pos.y - 10;
+      const right = pos.x + NODE_WIDTH + 10;
+      const bottom = pos.y + height + 10;
+      const cx = pos.x + NODE_WIDTH / 2;
+      const cy = pos.y + height / 2;
+
+      let best: string | null = null;
+      let bestDistance = Infinity;
+      for (const edge of graph.edges) {
+        if (edge.fromNode === nodeId || edge.toNode === nodeId) continue;
+        const source = graph.nodes.find((n) => n.id === edge.fromNode);
+        if (!source) continue;
+        const type = NODE_DEFS[source.type].outputs.find((p) => p.id === edge.fromPort)?.type;
+        if (!type) continue;
+        const input = def.inputs.find((p) => p.type === type);
+        const output = def.outputs.find((p) => p.type === type);
+        if (!input || !output) continue;
+        const occupied = graph.edges.some((e) => e.toNode === nodeId && e.toPort === input.id);
+        if (occupied && !input.multiple) continue;
+
+        const geometry = edgeGeometry(edge, graph.nodes, positions);
+        if (!geometry) continue;
+        let inside = false;
+        let minDistance = Infinity;
+        for (let i = 0; i <= 36; i++) {
+          const point = edgePoint(geometry, i / 36);
+          if (point.x >= left && point.x <= right && point.y >= top && point.y <= bottom) {
+            inside = true;
+          }
+          const d = Math.hypot(point.x - cx, point.y - cy);
+          if (d < minDistance) minDistance = d;
+        }
+        if (!inside) continue;
+        if (minDistance < bestDistance) {
+          bestDistance = minDistance;
+          best = edge.id;
+        }
+      }
+      return best;
+    },
+    [effectivePositions, graph.edges, graph.nodes],
+  );
+
+  useEffect(() => {
+    if (!drag || !drag.moved) {
+      setInsertEdgeId(null);
+      return;
+    }
+    setInsertEdgeId(
+      findInsertEdge(drag.id, { x: drag.origX + drag.dx, y: drag.origY + drag.dy }),
+    );
+  }, [drag, findInsertEdge]);
 
   const selectedPreview = useMemo(() => {
     if (!preview || !previewNodeId) return null;
@@ -269,9 +382,15 @@ export function GraphCanvas(): React.ReactElement {
     };
     const onUp = (): void => {
       setDrag((prev) => {
-        if (prev && prev.moved) moveNode(prev.id, prev.origX + prev.dx, prev.origY + prev.dy);
+        if (prev && prev.moved) {
+          const pos = { x: prev.origX + prev.dx, y: prev.origY + prev.dy };
+          const targetEdge = findInsertEdge(prev.id, pos);
+          if (targetEdge) insertNodeOnEdge(prev.id, targetEdge);
+          moveNode(prev.id, pos.x, pos.y);
+        }
         return null;
       });
+      setInsertEdgeId(null);
     };
     window.addEventListener('pointermove', onMove);
     window.addEventListener('pointerup', onUp);
@@ -279,7 +398,7 @@ export function GraphCanvas(): React.ReactElement {
       window.removeEventListener('pointermove', onMove);
       window.removeEventListener('pointerup', onUp);
     };
-  }, [drag, moveNode, view.zoom]);
+  }, [drag, findInsertEdge, insertNodeOnEdge, moveNode, view.zoom]);
 
   useEffect(() => {
     if (!pan) return;
@@ -553,7 +672,10 @@ export function GraphCanvas(): React.ReactElement {
               const midX = (x1 + x2) / 2;
               const midY = (y1 + y2) / 2;
               return (
-                <g key={edge.id} className="graph-edge">
+                <g
+                  key={edge.id}
+                  className={`graph-edge ${insertEdgeId === edge.id ? 'is-insert-target' : ''}`}
+                >
                   <path
                     d={d}
                     className="edge-hit"
@@ -783,8 +905,8 @@ export function GraphCanvas(): React.ReactElement {
 
         <div className="graph-hint">
           <Icon name="graph" size={14} />
-          Drag nodes · drag an output to any input row (or click output, then input) · wheel to zoom ·
-          double-click a wire to cut
+          Drag nodes · drop a node on a wire to insert it · drag an output to any input row (or click
+          output, then input) · wheel to zoom · hover a wire to cut it
           {mode === 'graph' ? ' · click nodes to preview that stage' : ''}
         </div>
       </div>

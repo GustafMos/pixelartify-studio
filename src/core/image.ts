@@ -106,49 +106,69 @@ export function resizeBilinear(src: PixelImage, width: number, height: number): 
   return out;
 }
 
-/** Area-average (box) downscale, premultiplied by alpha. */
+/** Area-average (box) downscale, premultiplied by alpha.
+ *
+ * Separable: a horizontal area pass into a float buffer, then a vertical pass.
+ * The result is mathematically identical to a single 2D area average, but each
+ * pass is a tight 1D loop, which is several times faster on large photos.
+ */
 export function resizeBox(src: PixelImage, width: number, height: number): PixelImage {
   const out = createImage(width, height);
   if (width === src.width && height === src.height) {
     out.data.set(src.data);
     return out;
   }
-  const scaleX = src.width / width;
-  const scaleY = src.height / height;
+
+  const xMap = boxWeights(src.width, width);
+  const yMap = boxWeights(src.height, height);
+  const sw = src.width;
   const sd = src.data;
-  const od = out.data;
 
-  for (let y = 0; y < height; y++) {
-    const y0 = y * scaleY;
-    const y1 = Math.min(src.height, (y + 1) * scaleY);
-    const iy0 = Math.floor(y0);
-    const iy1 = Math.max(iy0 + 1, Math.ceil(y1));
+  // Horizontal pass: premultiplied sums in 0..255 units, normalized weights.
+  const tmp = new Float32Array(src.height * width * 4);
+  for (let y = 0; y < src.height; y++) {
+    const rowBase = y * sw * 4;
     for (let x = 0; x < width; x++) {
-      const x0 = x * scaleX;
-      const x1 = Math.min(src.width, (x + 1) * scaleX);
-      const ix0 = Math.floor(x0);
-      const ix1 = Math.max(ix0 + 1, Math.ceil(x1));
-
       let r = 0;
       let g = 0;
       let b = 0;
       let a = 0;
-      let area = 0;
-      for (let yy = iy0; yy < iy1; yy++) {
-        const wy = Math.min(yy + 1, y1) - Math.max(yy, y0);
-        if (wy <= 0) continue;
-        for (let xx = ix0; xx < ix1; xx++) {
-          const wx = Math.min(xx + 1, x1) - Math.max(xx, x0);
-          if (wx <= 0) continue;
-          const w = wx * wy;
-          const si = (yy * src.width + xx) * 4;
-          const alpha = sd[si + 3] / 255;
-          r += sd[si] * alpha * w;
-          g += sd[si + 1] * alpha * w;
-          b += sd[si + 2] * alpha * w;
-          a += alpha * w;
-          area += w;
-        }
+      const start = xMap.start[x];
+      const end = start + xMap.count[x];
+      for (let s = start; s < end; s++) {
+        const w = xMap.weights[x * xMap.stride + (s - start)];
+        const si = rowBase + s * 4;
+        const alpha = sd[si + 3] / 255;
+        r += sd[si] * alpha * w;
+        g += sd[si + 1] * alpha * w;
+        b += sd[si + 2] * alpha * w;
+        a += alpha * w;
+      }
+      const ti = (y * width + x) * 4;
+      tmp[ti] = r;
+      tmp[ti + 1] = g;
+      tmp[ti + 2] = b;
+      tmp[ti + 3] = a;
+    }
+  }
+
+  // Vertical pass.
+  const od = out.data;
+  for (let y = 0; y < height; y++) {
+    const start = yMap.start[y];
+    const end = start + yMap.count[y];
+    for (let x = 0; x < width; x++) {
+      let r = 0;
+      let g = 0;
+      let b = 0;
+      let a = 0;
+      for (let s = start; s < end; s++) {
+        const w = yMap.weights[y * yMap.stride + (s - start)];
+        const ti = (s * width + x) * 4;
+        r += tmp[ti] * w;
+        g += tmp[ti + 1] * w;
+        b += tmp[ti + 2] * w;
+        a += tmp[ti + 3] * w;
       }
       const di = (y * width + x) * 4;
       if (a > 1e-6) {
@@ -156,10 +176,53 @@ export function resizeBox(src: PixelImage, width: number, height: number): Pixel
         od[di + 1] = g / a;
         od[di + 2] = b / a;
       }
-      od[di + 3] = area > 0 ? (a / area) * 255 : 0;
+      od[di + 3] = a * 255;
     }
   }
   return out;
+}
+
+interface BoxWeights {
+  start: Int32Array;
+  count: Int32Array;
+  weights: Float32Array;
+  stride: number;
+}
+
+/** Normalized area weights for one axis. */
+function boxWeights(srcSize: number, dstSize: number): BoxWeights {
+  const scale = srcSize / dstSize;
+  const start = new Int32Array(dstSize);
+  const count = new Int32Array(dstSize);
+  let stride = 1;
+  for (let i = 0; i < dstSize; i++) {
+    const a0 = i * scale;
+    const a1 = Math.min(srcSize, (i + 1) * scale);
+    const i0 = Math.floor(a0);
+    const i1 = Math.max(i0 + 1, Math.ceil(a1));
+    start[i] = i0;
+    count[i] = i1 - i0;
+    if (i1 - i0 > stride) stride = i1 - i0;
+  }
+  const weights = new Float32Array(dstSize * stride);
+  for (let i = 0; i < dstSize; i++) {
+    const a0 = i * scale;
+    const a1 = Math.min(srcSize, (i + 1) * scale);
+    let sum = 0;
+    for (let k = 0; k < count[i]; k++) {
+      const s = start[i] + k;
+      const w = Math.min(s + 1, a1) - Math.max(s, a0);
+      weights[i * stride + k] = w > 0 ? w : 0;
+      sum += weights[i * stride + k];
+    }
+    if (sum <= 0) {
+      weights[i * stride] = 1;
+      count[i] = 1;
+      sum = 1;
+    }
+    for (let k = 0; k < count[i]; k++) weights[i * stride + k] /= sum;
+  }
+  return { start, count, weights, stride };
 }
 
 export interface SampledPixel {

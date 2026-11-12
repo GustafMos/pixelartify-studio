@@ -7,6 +7,7 @@
  */
 
 import type {
+  ColorCorrectionSettings,
   PixelImage,
   PostprocessOp,
   PostprocessType,
@@ -14,6 +15,7 @@ import type {
   PreprocessType,
 } from './types';
 import {
+  applyTone,
   boxBlurRGBA,
   cloneImage,
   createImage,
@@ -21,7 +23,7 @@ import {
   sampleBilinear,
   unsharpMask,
 } from './image';
-import { clamp, clamp01, lerp, parseHex } from './color';
+import { clamp, clamp01, lerp, linearToSrgb, parseHex, srgbToLinear } from './color';
 import { fbm2D, hash2, mulberry32 } from './noise';
 
 export interface EffectParamDef {
@@ -45,7 +47,37 @@ export interface EffectDefinition<T extends string> {
   credits?: string[];
 }
 
+export const DEFAULT_COLOR_CORRECTION: ColorCorrectionSettings = {
+  exposure: 0,
+  contrast: 1,
+  brightness: 0,
+  saturation: 1,
+  gamma: 1,
+  hueShift: 0,
+  temperature: 0,
+  tint: 0,
+};
+
+export const COLOR_CORRECTION_PARAMS: EffectParamDef[] = [
+  { key: 'exposure', label: 'Exposure', min: -2, max: 2, step: 0.01, default: 0, unit: 'EV' },
+  { key: 'contrast', label: 'Contrast', min: 0.4, max: 2, step: 0.01, default: 1 },
+  { key: 'brightness', label: 'Brightness', min: -0.5, max: 0.5, step: 0.01, default: 0 },
+  { key: 'saturation', label: 'Saturation', min: 0, max: 2, step: 0.01, default: 1 },
+  { key: 'gamma', label: 'Gamma', min: 0.4, max: 2.5, step: 0.01, default: 1 },
+  { key: 'hueShift', label: 'Hue shift', min: -180, max: 180, step: 1, default: 0, unit: '°' },
+  { key: 'temperature', label: 'Temperature', min: -1, max: 1, step: 0.01, default: 0 },
+  { key: 'tint', label: 'Tint', min: -1, max: 1, step: 0.01, default: 0 },
+];
+
 export const PREPROCESS_DEFS: EffectDefinition<PreprocessType>[] = [
+  {
+    type: 'colorCorrect',
+    title: 'Color correct',
+    category: 'colour',
+    description:
+      'Exposure, contrast, saturation, gamma, hue, temperature and tint. Alpha is retained.',
+    params: COLOR_CORRECTION_PARAMS,
+  },
   {
     type: 'painterly',
     title: 'Painterly (Kuwahara)',
@@ -317,6 +349,9 @@ export function applyPreprocess(
   for (const op of ops) {
     if (!op.enabled) continue;
     switch (op.type) {
+      case 'colorCorrect':
+        img = colorCorrect(img, op);
+        break;
       case 'painterly':
         img = painterly(img, op, ctx);
         break;
@@ -361,6 +396,44 @@ export function applyPreprocess(
 /* -------------------------------------------------------------------------- */
 /* Implementations                                                            */
 /* -------------------------------------------------------------------------- */
+
+export function applyColorCorrection(
+  img: PixelImage,
+  settings: Partial<ColorCorrectionSettings>,
+): PixelImage {
+  const p = { ...DEFAULT_COLOR_CORRECTION, ...settings };
+  const out = cloneImage(img);
+  const exposureFactor = Math.pow(2, p.exposure);
+  const temperature = clamp(p.temperature, -1, 1);
+  const tint = clamp(p.tint, -1, 1);
+  const rGain = exposureFactor * Math.max(0.05, 1 + temperature * 0.28 + tint * 0.06);
+  const gGain = exposureFactor * Math.max(0.05, 1 - tint * 0.22);
+  const bGain = exposureFactor * Math.max(0.05, 1 - temperature * 0.28 + tint * 0.06);
+  const data = out.data;
+
+  for (let i = 0; i < data.length; i += 4) {
+    if (data[i + 3] === 0) continue;
+    const r = Math.pow(srgbToLinear(data[i] / 255) * rGain, 1);
+    const g = Math.pow(srgbToLinear(data[i + 1] / 255) * gGain, 1);
+    const b = Math.pow(srgbToLinear(data[i + 2] / 255) * bGain, 1);
+    data[i] = linearToSrgb(r) * 255;
+    data[i + 1] = linearToSrgb(g) * 255;
+    data[i + 2] = linearToSrgb(b) * 255;
+  }
+
+  applyTone(out, {
+    brightness: p.brightness,
+    contrast: p.contrast,
+    saturation: p.saturation,
+    gamma: p.gamma,
+    hueShift: p.hueShift,
+  });
+  return out;
+}
+
+function colorCorrect(img: PixelImage, op: PreprocessOp): PixelImage {
+  return applyColorCorrection(img, op.params);
+}
 
 function painterly(img: PixelImage, op: PreprocessOp, ctx: EffectContext): PixelImage {
   const radius = Math.max(1, Math.round((op.params.radius ?? 3) * scaleOf(img, ctx)));

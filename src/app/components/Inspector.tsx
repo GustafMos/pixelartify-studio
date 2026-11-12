@@ -6,6 +6,7 @@ import { Badge, EmptyState, IconButton } from './controls';
 import { Icon } from './icons';
 import { InputPanel } from './inspectors/InputPanel';
 import { CropPanel, ResizePanel, ChannelsPanel } from './inspectors/GeometryPanels';
+import { ColorPanel } from './inspectors/ColorPanel';
 import { PixelatePanel } from './inspectors/PixelatePanel';
 import { PalettePanel } from './inspectors/PalettePanel';
 import { DitherPanel } from './inspectors/DitherPanel';
@@ -106,6 +107,8 @@ function renderPanel(node: GraphNode): React.ReactElement {
       return <ResizePanel node={node} />;
     case 'channels':
       return <ChannelsPanel node={node} />;
+    case 'color':
+      return <ColorPanel node={node} />;
     case 'pixelate':
       return <PixelatePanel node={node} />;
     case 'palette':
@@ -222,6 +225,7 @@ function nodeIcon(type: GraphNode['type']): Parameters<typeof Icon>[0]['name'] {
     crop: 'fit',
     resize: 'zoomIn',
     channels: 'layers',
+    color: 'sliders',
     preprocess: 'wand',
     pixelate: 'grid',
     palette: 'palette',

@@ -37,12 +37,43 @@ import {
 import { clamp01, lerp } from './color';
 import { computeArtSize, computeWorkingSize } from './resolution';
 import { applyPreprocess, applyPostprocess, blendImages, type EffectContext } from './preprocess';
-import { pixelateImage } from './pixelate';
+import { pixelateImage, type PixelateSourceOptions } from './pixelate';
+import { unsharpMask } from './image';
 import { inpaintImage } from './inpaint';
 import { applyDither } from './dither';
 import { createPaletteMatcher, extractPalette, snapToPalette } from './palette';
 
 export type RenderStop = 'source' | 'preprocess' | 'pixelate' | 'dither' | 'post';
+
+/** Optional accelerated pixelator (WebGL2/WebGPU). Returns null on fallback. */
+export type Pixelator = (src: PixelImage, options: PixelateSourceOptions) => PixelImage | null;
+
+let globalPixelator: Pixelator | null = null;
+
+export function setGlobalPixelator(pixelator: Pixelator | null): void {
+  globalPixelator = pixelator;
+}
+
+function runPixelator(
+  src: PixelImage,
+  options: PixelateSourceOptions,
+  override?: Pixelator,
+): { image: PixelImage; usedEdgeMap: boolean } {
+  const accelerated = (override ?? globalPixelator)?.(src, options);
+  if (accelerated) {
+    // The CPU sampler applies the unsharp finish inside pixelateImage(); the
+    // GPU pass stops at the raw art pixels, so finish it here.
+    const image =
+      options.settings.postSharpen > 0.001
+        ? unsharpMask(accelerated, 0.75, options.settings.postSharpen)
+        : accelerated;
+    return {
+      image,
+      usedEdgeMap: options.settings.edgeAware && options.settings.alignment > 0.001,
+    };
+  }
+  return pixelateImage(src, options);
+}
 
 export interface RenderOptions {
   /** Called between expensive stages for progress reporting. */
@@ -55,6 +86,8 @@ export interface RenderOptions {
   upscale?: boolean;
   /** Cap the canonical working resolution (fast previews). */
   maxWorkingSide?: number;
+  /** Override the pixelation backend for this render. */
+  pixelator?: Pixelator;
 }
 
 export function renderPixelArt(
@@ -153,11 +186,15 @@ export function renderPixelArt(
   if (!pixelationEnabled) {
     art = src;
   } else if (visibleLayers.length === 0) {
-    const result = pixelateImage(src, {
-      artWidth: size.width,
-      artHeight: size.height,
-      settings: settings.pixelate,
-    });
+    const result = runPixelator(
+      src,
+      {
+        artWidth: size.width,
+        artHeight: size.height,
+        settings: settings.pixelate,
+      },
+      options.pixelator,
+    );
     art = result.image;
     usedEdgeMap = result.usedEdgeMap;
   } else {
@@ -206,11 +243,15 @@ export function renderPixelArt(
         multiplyAlpha(source, resizeMask(mask, working.width, working.height));
       }
 
-      const result = pixelateImage(source, {
-        artWidth: size.width,
-        artHeight: size.height,
-        settings: settings.pixelate,
-      });
+      const result = runPixelator(
+        source,
+        {
+          artWidth: size.width,
+          artHeight: size.height,
+          settings: settings.pixelate,
+        },
+        options.pixelator,
+      );
       usedEdgeMap = usedEdgeMap || result.usedEdgeMap;
       layerArt.push({ layer, image: result.image });
       renderLayers.push({
@@ -226,11 +267,15 @@ export function renderPixelArt(
     }
 
     if (layerArt.length === 0) {
-      const result = pixelateImage(src, {
-        artWidth: size.width,
-        artHeight: size.height,
-        settings: settings.pixelate,
-      });
+      const result = runPixelator(
+        src,
+        {
+          artWidth: size.width,
+          artHeight: size.height,
+          settings: settings.pixelate,
+        },
+        options.pixelator,
+      );
       art = result.image;
       usedEdgeMap = result.usedEdgeMap;
     } else {
