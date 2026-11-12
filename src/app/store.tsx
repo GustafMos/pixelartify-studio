@@ -528,54 +528,62 @@ export function StudioProvider({ children }: { children: React.ReactNode }): Rea
     const anchor = selectedNode ?? null;
     let px = x;
     let py = y;
-    let splice: {
-      edgeId: string;
+    let plans: Array<{
       fromPort: string;
-      toNode: string;
-      toPort: string;
       inPort: string;
       outPort: string;
-    } | null = null;
+      edges: Array<{ id: string; toNode: string; toPort: string }>;
+    }> = [];
     let connect: { fromNode: string; fromPort: string; toPort: string } | null = null;
 
     if (anchor) {
       px = anchor.x + 260;
       py = anchor.y;
-      const outPort = NODE_DEFS[anchor.type].outputs.find((output) =>
-        def.inputs.some((input) => input.type === output.type),
-      );
-      if (outPort) {
+      let firstCompatible: { fromPort: string; inPort: string } | null = null;
+      for (const outPort of NODE_DEFS[anchor.type].outputs) {
         const inPort = def.inputs.find((input) => input.type === outPort.type);
         const newOutPort = def.outputs.find((output) => output.type === outPort.type);
-        if (inPort && newOutPort) {
-          // Prefer splicing the new node into the selected node's outgoing wire.
-          const candidate = graph.edges.find((edge) => {
+        if (!inPort || !newOutPort) continue;
+        if (!firstCompatible) firstCompatible = { fromPort: outPort.id, inPort: inPort.id };
+
+        // Reroute every outgoing wire of this socket type through the new node.
+        const outgoing = graph.edges
+          .filter((edge) => {
             if (edge.fromNode !== anchor.id || edge.fromPort !== outPort.id) return false;
             const target = graph.nodes.find((n) => n.id === edge.toNode);
             if (!target) return false;
             return NODE_DEFS[target.type].inputs.some(
               (input) => input.id === edge.toPort && input.type === newOutPort.type,
             );
+          })
+          .map((edge) => ({ id: edge.id, toNode: edge.toNode, toPort: edge.toPort }));
+
+        if (outgoing.length > 0) {
+          plans.push({
+            fromPort: outPort.id,
+            inPort: inPort.id,
+            outPort: newOutPort.id,
+            edges: outgoing,
           });
-          if (candidate) {
-            const target = graph.nodes.find((n) => n.id === candidate.toNode);
-            splice = {
-              edgeId: candidate.id,
-              fromPort: candidate.fromPort,
-              toNode: candidate.toNode,
-              toPort: candidate.toPort,
-              inPort: inPort.id,
-              outPort: newOutPort.id,
-            };
-            if (target) {
-              const gap = target.x - anchor.x;
-              px = gap > 520 ? anchor.x + Math.round(gap / 2) - 106 : anchor.x + 260;
-              py = Math.round((anchor.y + target.y) / 2);
-            }
-          } else {
-            connect = { fromNode: anchor.id, fromPort: outPort.id, toPort: inPort.id };
-          }
         }
+      }
+
+      if (plans.length > 0) {
+        const targets = plans
+          .flatMap((plan) => plan.edges.map((edge) => graph.nodes.find((n) => n.id === edge.toNode)))
+          .filter((node): node is GraphNode => Boolean(node));
+        if (targets.length > 0) {
+          const avgX = targets.reduce((sum, node) => sum + node.x, 0) / targets.length;
+          const avgY = targets.reduce((sum, node) => sum + node.y, 0) / targets.length;
+          px = Math.max(anchor.x + 260, Math.round(avgX) - 106);
+          py = Math.round(avgY);
+        }
+      } else if (firstCompatible) {
+        connect = {
+          fromNode: anchor.id,
+          fromPort: firstCompatible.fromPort,
+          toPort: firstCompatible.inPort,
+        };
       }
     } else if (px === undefined || py === undefined) {
       px = 80;
@@ -585,30 +593,36 @@ export function StudioProvider({ children }: { children: React.ReactNode }): Rea
     const node = createNode(type, px ?? 80, py ?? 200, nodeParams(type, settings), settings);
     mutateGraph((g) => {
       let next: PipelineGraph = { ...g, nodes: [...g.nodes, node] };
-      if (splice) {
-        const target = g.nodes.find((n) => n.id === splice!.toNode);
-        if (target) {
-          next = {
-            ...next,
-            edges: [
-              ...g.edges.filter((edge) => edge.id !== splice!.edgeId),
-              {
-                id: uid('edge'),
-                fromNode: anchor!.id,
-                fromPort: splice!.fromPort,
-                toNode: node.id,
-                toPort: splice!.inPort,
-              },
-              {
-                id: uid('edge'),
-                fromNode: node.id,
-                fromPort: splice!.outPort,
-                toNode: target.id,
-                toPort: splice!.toPort,
-              },
-            ],
-          };
+      if (plans.length > 0) {
+        const removed = new Set(plans.flatMap((plan) => plan.edges.map((edge) => edge.id)));
+        const edges = g.edges.filter((edge) => !removed.has(edge.id));
+        const seen = new Set<string>();
+        for (const plan of plans) {
+          const inputKey = `in:${plan.fromPort}:${plan.inPort}`;
+          if (!seen.has(inputKey)) {
+            seen.add(inputKey);
+            edges.push({
+              id: uid('edge'),
+              fromNode: anchor!.id,
+              fromPort: plan.fromPort,
+              toNode: node.id,
+              toPort: plan.inPort,
+            });
+          }
+          for (const edge of plan.edges) {
+            const outputKey = `out:${plan.outPort}:${edge.toNode}:${edge.toPort}`;
+            if (seen.has(outputKey)) continue;
+            seen.add(outputKey);
+            edges.push({
+              id: uid('edge'),
+              fromNode: node.id,
+              fromPort: plan.outPort,
+              toNode: edge.toNode,
+              toPort: edge.toPort,
+            });
+          }
         }
+        next = { ...next, edges };
       } else if (connect) {
         next = {
           ...next,

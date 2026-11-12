@@ -61,7 +61,7 @@ Open <http://localhost:5173>. Everything runs locally. Drop images or videos ont
 
 ```bash
 npm run build      # typecheck + production build
-npm run test       # 38 core tests
+npm run test       # 39 core tests
 npm run cli -- --help
 npm run build:cli  # bundle the headless CLI
 ```
@@ -94,13 +94,13 @@ The studio targets modern Chromium/Firefox/Safari. Video decoding/encoding uses 
 
 **Connecting:** drag from an output dot to anywhere on an input port row, or click an output then click an input. The **Connections** panel in the inspector is a keyboard-friendly fallback for adding and removing connections. Drag from an input to an output too — both directions work.
 
-**Adding after the selected node:** when a node is selected, adding a new one places it to the right and splices it into that node's outgoing connection. The same applies to **Shift+Space**, which opens a searchable command palette with recently used node types at the top. Use ↑/↓ and Enter to add; Esc closes.
+**Adding after the selected node:** when a node is selected, adding a new one places it to the right and moves **all compatible outgoing connections** through the new node. If the selected node fans out to several targets, the new node takes over the whole fan-out and then fans it back out. The same applies to **Shift+Space**, which opens a searchable command palette with recently used node types at the top. Use ↑/↓ and Enter to add; Esc closes.
 
 **Detaching:** hold **Shift** while dragging a node to detach it from all of its wires. The chain behind it is bridged automatically so the tree stays connected (a Router is inserted when several branches meet). Drop the node onto another wire to splice it back in, or drop it on empty canvas to leave it detached.
 
 **Inserting:** drag a node by its title bar and drop it on a wire. The wire highlights green while the drop target is valid; releasing splices the node between the two existing nodes. Nodes with an incompatible port type, an occupied single input or a would-be cycle are left untouched.
 
-**Disconnecting:** hover a wire and click the red × cut button, use the Connections panel, or double-click the wire. Deleting a node automatically bridges its upstream and downstream connections; if the node has several upstream branches, a **Router** node is inserted so the tree stays intact.
+**Disconnecting:** hover a wire and click the red × cut button, use the Connections panel, or double-click the wire. Deleting a node reconnects **all** of its downstream branches to the upstream node; if the node has several upstream branches, a **Router** node is inserted instead so the tree stays intact.
 
 The **Split** tab shows the viewer and the node graph at the same time with a draggable divider. Mouse wheel zooms the graph; drag the background to pan. `G` cycles Studio → Split → Node graph.
 

@@ -528,6 +528,25 @@ describe('nodes and graph', () => {
     expect(result.graph.edges[0]).toMatchObject({ fromNode: a.id, toNode: c.id });
   });
 
+  it('reconnects every branch when deleting a multi-output node', () => {
+    const graph: PipelineGraph = { id: 'g', name: 'g', description: '', nodes: [], edges: [] };
+    const a = createNode('preprocess', 0, 0);
+    const b = createNode('color', 100, 0);
+    const c = createNode('output', 200, -50);
+    const d = createNode('output', 200, 50);
+    graph.nodes.push(a, b, c, d);
+    graph.edges.push(
+      { id: 'e1', fromNode: a.id, fromPort: 'media', toNode: b.id, toPort: 'media' },
+      { id: 'e2', fromNode: b.id, fromPort: 'media', toNode: c.id, toPort: 'media' },
+      { id: 'e3', fromNode: b.id, fromPort: 'media', toNode: d.id, toPort: 'media' },
+    );
+    const result = deleteNodePreservingGraph(graph, b.id);
+    expect(result.routerAdded).toBe(false);
+    expect(result.graph.edges.some((e) => e.fromNode === a.id && e.toNode === c.id)).toBe(true);
+    expect(result.graph.edges.some((e) => e.fromNode === a.id && e.toNode === d.id)).toBe(true);
+    expect(result.graph.edges.some((e) => e.fromNode === b.id || e.toNode === b.id)).toBe(false);
+  });
+
   it('inserts a router when several branches feed the deleted node', () => {
     const graph: PipelineGraph = { id: 'g', name: 'g', description: '', nodes: [], edges: [] };
     const a = createNode('input', 0, 0);
