@@ -114,6 +114,7 @@ interface StudioContextValue {
   videoTime: number;
   videoFrame: PixelImage | null;
   videoFrameLoading: boolean;
+  videoPlaying: boolean;
   paletteStudioOpen: boolean;
   toasts: Toast[];
   setMode: (mode: 'studio' | 'split' | 'graph') => void;
@@ -123,6 +124,8 @@ interface StudioContextValue {
   setActivePalette: (id: string | null) => void;
   setPaletteStudioOpen: (open: boolean) => void;
   setVideoTime: (time: number) => void;
+  setVideoPlaying: (playing: boolean) => void;
+  onPlaybackFrame: (image: PixelImage, time: number) => void;
   setPreviewFullQuality: (full: boolean) => void;
   addNode: (type: GraphNodeType, x?: number, y?: number) => string;
   duplicateNode: (id: string) => string | null;
@@ -198,6 +201,7 @@ export function StudioProvider({ children }: { children: React.ReactNode }): Rea
   const [videoTime, setVideoTimeState] = useState(0);
   const [videoFrame, setVideoFrame] = useState<PixelImage | null>(null);
   const [videoFrameLoading, setVideoFrameLoading] = useState(false);
+  const [videoPlaying, setVideoPlayingState] = useState(false);
   const [paletteStudioOpen, setPaletteStudioOpen] = useState(false);
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [isExporting, setIsExporting] = useState(false);
@@ -211,6 +215,7 @@ export function StudioProvider({ children }: { children: React.ReactNode }): Rea
   const toastIdRef = useRef(1);
   const renderGenRef = useRef(0);
   const videoLoadRef = useRef(0);
+  const playbackPaletteRef = useRef<{ key: string; colors: string[] } | null>(null);
 
   const notify = useCallback((message: string, kind: Toast['kind'] = 'info') => {
     const id = toastIdRef.current++;
@@ -341,6 +346,20 @@ export function StudioProvider({ children }: { children: React.ReactNode }): Rea
     const timer = window.setTimeout(() => {
       try {
         const settings = settingsFromItem(activeItem);
+        const paletteKey = videoPlaying
+          ? [
+              activeItem.assetId,
+              settings.palette.mode,
+              settings.palette.autoCount,
+              settings.palette.quantizer,
+              settings.dither.algorithm,
+              settings.palette.colors.join(','),
+            ].join('|')
+          : '';
+        const paletteOverride =
+          videoPlaying && playbackPaletteRef.current?.key === paletteKey
+            ? playbackPaletteRef.current.colors
+            : undefined;
         let source = activeItem.source;
         let masks = activeItem.masks;
         if (activeAsset?.kind === 'video' && videoFrame) {
@@ -353,9 +372,13 @@ export function StudioProvider({ children }: { children: React.ReactNode }): Rea
             stopAfter: stopStageForNode(previewNode.type),
             upscale: false,
             seed: 0,
-            maxWorkingSide: previewFullQuality ? 2048 : 1200,
+            maxWorkingSide: videoPlaying ? 640 : previewFullQuality ? 2048 : 1200,
+            paletteOverride,
           },
         );
+        if (videoPlaying && result.palette.length > 0) {
+          playbackPaletteRef.current = { key: paletteKey, colors: result.palette };
+        }
         if (gen === renderGenRef.current) {
           setPreview(result);
           setIsRendering(false);
@@ -366,10 +389,10 @@ export function StudioProvider({ children }: { children: React.ReactNode }): Rea
           setIsRendering(false);
         }
       }
-    }, 110);
+    }, videoPlaying ? 0 : 110);
 
     return () => window.clearTimeout(timer);
-  }, [previewNode, activeItem, activeAsset, videoFrame, previewFullQuality]);
+  }, [previewNode, activeItem, activeAsset, videoFrame, videoPlaying, previewFullQuality]);
 
   // Persist the graph and libraries.
   useEffect(() => {
@@ -392,6 +415,12 @@ export function StudioProvider({ children }: { children: React.ReactNode }): Rea
   useEffect(() => {
     if (!activeAsset || activeAsset.kind !== 'video' || !activeAsset.file) {
       setVideoFrame(null);
+      setVideoFrameLoading(false);
+      return;
+    }
+    if (videoPlaying) {
+      // Playback publishes frames directly from the hidden <video> element.
+      setVideoFrameLoading(false);
       return;
     }
     const gen = ++videoLoadRef.current;
@@ -407,7 +436,11 @@ export function StudioProvider({ children }: { children: React.ReactNode }): Rea
       }
     }, 140);
     return () => window.clearTimeout(timer);
-  }, [activeAsset, videoTime, notify]);
+  }, [activeAsset, videoTime, videoPlaying, notify]);
+
+  useEffect(() => {
+    setVideoPlayingState(false);
+  }, [activeAsset?.id]);
 
   const setMode = useCallback((next: 'studio' | 'split' | 'graph') => {
     setModeState(next);
@@ -424,6 +457,14 @@ export function StudioProvider({ children }: { children: React.ReactNode }): Rea
   const setActivePalette = useCallback((id: string | null) => setActivePaletteIdState(id), []);
   const setPaletteStudioOpenCb = useCallback((open: boolean) => setPaletteStudioOpen(open), []);
   const setVideoTime = useCallback((time: number) => setVideoTimeState(Math.max(0, time)), []);
+  const setVideoPlaying = useCallback((playing: boolean) => {
+    setVideoPlayingState(playing);
+    if (!playing) setVideoFrameLoading(false);
+  }, []);
+  const onPlaybackFrame = useCallback((image: PixelImage, time: number) => {
+    setVideoFrame(image);
+    setVideoTimeState(Math.max(0, time));
+  }, []);
 
   const addNode = useCallback((type: GraphNodeType, x?: number, y?: number): string => {
     const settings = settingsFromGraph(graph);
@@ -734,7 +775,6 @@ export function StudioProvider({ children }: { children: React.ReactNode }): Rea
     }
     setMaskOverrides({});
     maskCacheRef.current.clear();
-    setModeState('studio');
     notify(`Preset “${preset.name}” applied.`, 'success');
   }, [allAssets, graph, notify]);
 
@@ -1046,6 +1086,7 @@ export function StudioProvider({ children }: { children: React.ReactNode }): Rea
     videoTime,
     videoFrame,
     videoFrameLoading,
+    videoPlaying,
     paletteStudioOpen,
     toasts,
     setMode,
@@ -1055,6 +1096,8 @@ export function StudioProvider({ children }: { children: React.ReactNode }): Rea
     setActivePalette,
     setPaletteStudioOpen: setPaletteStudioOpenCb,
     setVideoTime,
+    setVideoPlaying,
+    onPlaybackFrame,
     setPreviewFullQuality,
     addNode,
     duplicateNode,

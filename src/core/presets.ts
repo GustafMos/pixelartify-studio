@@ -6,6 +6,7 @@ import type { PixelArtifySettings, PipelineGraph, Preset } from './types';
 import {
   DEFAULT_DITHER,
   DEFAULT_EXTRACTION,
+  DEFAULT_VIDEO,
   deepClone,
   defaultSettings,
   mergeSettings,
@@ -294,7 +295,8 @@ export const BUILTIN_PRESETS: Preset[] = [
         output: 'both',
         codec: 'avc',
         bitrateMbps: 8,
-        spritesheet: { columns: 0, padding: 0, maxSize: 2048, powerOfTwo: false },
+        spritesheet: { columns: 0, padding: 0, maxSize: 2048, powerOfTwo: false, split: true },
+        print: { ...DEFAULT_VIDEO.print },
       },
       output: { ...defaultSettings().output, transparent: true, exportLayers: false },
       postprocess: { ops: [createPostprocessOp('outline')], lockPalette: true },

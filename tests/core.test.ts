@@ -16,8 +16,11 @@ import {
   defaultSettings,
   extractPalette,
   generateHarmony,
+  layoutPrintPages,
   packSpritesheet,
+  packSpritesheets,
   parsePalette,
+  renderPrintPage,
   parsePreset,
   renderPixelArt,
   serializePalette,
@@ -553,6 +556,49 @@ describe('spritesheet safety', () => {
     expect(() =>
       packSpritesheet([huge, huge, huge, huge], { columns: 0, padding: 0, maxSize: 4096, powerOfTwo: false }),
     ).toThrow(/too large|would be/i);
+  });
+
+  it('splits a long animation across several sheets', () => {
+    const frames = Array.from({ length: 20 }, () => createImage(16, 16));
+    const sheets = packSpritesheets(
+      frames,
+      { columns: 0, padding: 0, maxSize: 64, powerOfTwo: false, split: true },
+      [],
+    );
+    expect(sheets.length).toBeGreaterThan(1);
+    for (const sheet of sheets) {
+      expect(sheet.sheetWidth).toBeLessThanOrEqual(64);
+      expect(sheet.sheetHeight).toBeLessThanOrEqual(64);
+    }
+    expect(sheets.reduce((n, s) => n + s.frames.length, 0)).toBe(20);
+  });
+});
+
+describe('A4 print layout', () => {
+  it('lays out frames on an A4 page with registration marks in the gutters', () => {
+    const frames = Array.from({ length: 8 }, () => createImage(16, 16));
+    const layout = layoutPrintPages(frames, {
+      orientation: 'portrait',
+      dpi: 150,
+      marginMm: 10,
+      gutterMm: 4,
+      markMm: 3,
+      scaleMode: 'actual',
+    });
+    expect(layout.pages).toHaveLength(1);
+    const image = renderPrintPage(layout, frames, 0);
+    expect(image.width).toBe(Math.round((210 * 150) / 25.4));
+    expect(image.height).toBe(Math.round((297 * 150) / 25.4));
+    expect(layout.columns).toBeGreaterThan(0);
+    expect(layout.gutterPx).toBe(Math.round((4 * 150) / 25.4));
+    // Paper starts white, frames are placed, and the first + mark is black.
+    expect(pixel(image, 0, 0)).toEqual([255, 255, 255, 255]);
+    const markX = layout.marginPx - Math.floor(layout.gutterPx / 2);
+    const markY = markX;
+    const [r, g, b] = pixel(image, markX, markY);
+    expect(Math.max(r, g, b)).toBeLessThan(30);
+    // Every frame is accounted for, in order.
+    expect(layout.placements.map((p) => p.index)).toEqual([0, 1, 2, 3, 4, 5, 6, 7]);
   });
 });
 

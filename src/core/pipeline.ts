@@ -9,6 +9,7 @@
  */
 
 import type {
+  DitherSettings,
   LayerSettings,
   MaskData,
   PaletteSettings,
@@ -75,6 +76,31 @@ function runPixelator(
   return pixelateImage(src, options);
 }
 
+/** Optional accelerated dither (WebGL2). Returns null when unsupported. */
+export type DitherFinisher = (
+  image: PixelImage,
+  palette: string[],
+  settings: DitherSettings,
+  seed: number,
+) => PixelImage | null;
+
+let globalDitherFinisher: DitherFinisher | null = null;
+
+export function setGlobalDitherFinisher(finisher: DitherFinisher | null): void {
+  globalDitherFinisher = finisher;
+}
+
+function runDither(
+  image: PixelImage,
+  palette: string[],
+  settings: DitherSettings,
+  seed: number,
+): PixelImage {
+  const accelerated = globalDitherFinisher?.(image, palette, settings, seed);
+  if (accelerated) return accelerated;
+  return applyDither(image, palette, settings, { seed });
+}
+
 export interface RenderOptions {
   /** Called between expensive stages for progress reporting. */
   onStage?: (stage: string, progress: number) => void;
@@ -88,6 +114,8 @@ export interface RenderOptions {
   maxWorkingSide?: number;
   /** Override the pixelation backend for this render. */
   pixelator?: Pixelator;
+  /** Reuse a previously resolved palette (used for smooth video playback). */
+  paletteOverride?: string[];
 }
 
 export function renderPixelArt(
@@ -297,12 +325,15 @@ export function renderPixelArt(
 
   stage('Palette & dither', 0.65);
   const paletteSettings = settings.palette;
-  let palette = resolvePalette(art, paletteSettings, settings.dither.algorithm);
+  let palette =
+    options.paletteOverride && options.paletteOverride.length > 0
+      ? options.paletteOverride
+      : resolvePalette(art, paletteSettings, settings.dither.algorithm);
 
   if (palette.length > 0) {
     const before = cloneImage(art);
     if (settings.dither.algorithm !== 'none') {
-      const dithered = applyDither(art, palette, settings.dither, { seed: options.seed ?? 0 });
+      const dithered = runDither(art, palette, settings.dither, options.seed ?? 0);
       art = paletteSettings.strength >= 0.999 ? dithered : blendImages(before, dithered, paletteSettings.strength);
     } else {
       art = before;

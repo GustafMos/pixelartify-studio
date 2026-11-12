@@ -12,6 +12,7 @@ export * from './extraction';
 export * from './palette';
 export * from './dither';
 export * from './spritesheet';
+export * from './print';
 export * from './pipeline';
 export * from './defaults';
 export * from './graph';

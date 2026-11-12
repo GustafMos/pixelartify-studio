@@ -1,5 +1,5 @@
 import React, { useMemo, useRef, useState } from 'react';
-import type { GraphNode, OutputSettings, VideoSettings } from '../../../core/types';
+import type { GraphNode, OutputSettings, PrintSettings, VideoSettings } from '../../../core/types';
 import type { GraphMediaItem } from '../../../core/graph';
 import {
   DEFAULT_OUTPUT,
@@ -8,11 +8,15 @@ import {
   SHEET_MAX_SIDE,
   computeArtSize,
   defaultSettings,
-  packSpritesheet,
+  layoutPrintPages,
+  packSpritesheets,
+  printMetadata,
   renderPixelArt,
+  renderPrintPage,
   settingsFromItem,
   spritesheetMetadata,
 } from '../../../core';
+import type { PixelImage } from '../../../core/types';
 import { mediaAtPort } from '../../../core/graph';
 import { useStudio } from '../../store';
 import {
@@ -72,6 +76,8 @@ export function OutputPanel({ node }: { node: GraphNode }): React.ReactElement {
     updateNodeParams(node.id, { video: { ...video, ...patch } });
   const setSheet = (patch: Partial<VideoSettings['spritesheet']>): void =>
     updateNodeParams(node.id, { video: { ...video, spritesheet: { ...video.spritesheet, ...patch } } });
+  const setPrint = (patch: Partial<PrintSettings>): void =>
+    updateNodeParams(node.id, { video: { ...video, print: { ...video.print, ...patch } } });
 
   const outputItems = useMemo(
     () => (selectedOutputId ? mediaAtPort(evaluation, selectedOutputId) : []),
@@ -111,8 +117,56 @@ export function OutputPanel({ node }: { node: GraphNode }): React.ReactElement {
     };
   };
 
-  const runSpritesheet = async (items: GraphMediaItem[], assetName: string, fps: number, isVideo: boolean) => {
-    const frames: ReturnType<typeof renderPixelArt>['art'][] = [];
+  interface SheetOutput {
+    png: Blob;
+    json: string;
+    name: string;
+    metaName: string;
+    sheet: ReturnType<typeof packSpritesheets>[number];
+  }
+
+  const buildSheetOutputs = async (
+    frames: PixelImage[],
+    durations: number[],
+    fps: number,
+    base: string,
+  ): Promise<SheetOutput[]> => {
+    const sheets = packSpritesheets(frames, video.spritesheet, durations);
+    const outputs: SheetOutput[] = [];
+    for (let i = 0; i < sheets.length; i++) {
+      const sheet = sheets[i];
+      const suffix = sheets.length > 1 ? `-sheet-${i + 1}` : '-sheet';
+      const nameBase = `${base}${suffix}`;
+      const png = await pixelImageToBlob(sheet.image, 'png', 1);
+      const json = JSON.stringify(spritesheetMetadata(sheet, nameBase, fps), null, 2);
+      outputs.push({ png, json, name: `${nameBase}.png`, metaName: `${nameBase}.json`, sheet });
+    }
+    return outputs;
+  };
+
+  const downloadSheetOutputs = async (outputs: SheetOutput[], base: string): Promise<void> => {
+    if (outputs.length === 1) {
+      const only = outputs[0];
+      downloadBlob(only.png, only.name);
+      downloadText(only.json, only.metaName);
+      return;
+    }
+    await downloadZip(
+      outputs.flatMap((out) => [
+        { name: out.name, data: out.png },
+        { name: out.metaName, data: out.json },
+      ]),
+      `${base}-sheets.zip`,
+    );
+  };
+
+  const runSpritesheet = async (
+    items: GraphMediaItem[],
+    assetName: string,
+    fps: number,
+    isVideo: boolean,
+  ): Promise<{ outputs: SheetOutput[]; frameCount: number; base: string; isVideo: boolean }> => {
+    const frames: PixelImage[] = [];
     const durations: number[] = [];
     for (let i = 0; i < items.length; i++) {
       setProgress(`Rendering frame ${i + 1} / ${items.length}`);
@@ -122,36 +176,27 @@ export function OutputPanel({ node }: { node: GraphNode }): React.ReactElement {
     }
     if (frames.length === 0) throw new Error('No frames to pack.');
     setProgress('Packing spritesheet…');
-    const sheet = packSpritesheet(frames, video.spritesheet, durations);
-    const png = await pixelImageToBlob(sheet.image, 'png', 1);
     const base = assetName.replace(/\.[^.]+$/, '') || 'pixelart';
-    const meta = spritesheetMetadata(sheet, `${base}-sheet`, fps);
-    return {
-      png,
-      json: JSON.stringify(meta, null, 2),
-      name: `${base}-sheet.png`,
-      metaName: `${base}-sheet.json`,
-      sheet,
-      isVideo,
-    };
+    const outputs = await buildSheetOutputs(frames, durations, fps, base);
+    return { outputs, frameCount: frames.length, base, isVideo };
   };
 
-  const exportSpritesheetOnly = async (): Promise<{ png: Blob; json: string; name: string; metaName: string } | null> => {
+  const exportSpritesheetOnly = async (): Promise<void> => {
     const sourceItems = outputItems.length > 0 ? outputItems : activeItem ? [activeItem] : [];
     if (sourceItems.length === 0) {
       notify('No assets connected to this output.', 'warn');
-      return null;
+      return;
     }
     const fps = video.fps;
     try {
       const built = await runSpritesheet(sourceItems, activeAsset?.name ?? 'pixelart', fps, false);
-      downloadBlob(built.png, built.name);
-      downloadText(built.json, built.metaName);
-      notify(`Spritesheet exported (${built.sheet.frames.length} frames, ${built.sheet.sheetWidth}×${built.sheet.sheetHeight}).`, 'success');
-      return built;
+      await downloadSheetOutputs(built.outputs, built.base);
+      notify(
+        `Spritesheet exported (${built.outputs.length} sheet${built.outputs.length === 1 ? '' : 's'}, ${built.frameCount} frames).`,
+        'success',
+      );
     } catch (err) {
       notify(`Spritesheet export failed: ${err instanceof Error ? err.message : err}`, 'error');
-      return null;
     }
   };
 
@@ -186,9 +231,18 @@ export function OutputPanel({ node }: { node: GraphNode }): React.ReactElement {
         return;
       }
       if (wantsSheet) {
+        const split = settings.video.spritesheet.split !== false;
         const area = cellW * cellH * count;
-        if (cellW > SHEET_MAX_SIDE || cellH > SHEET_MAX_SIDE || area > SHEET_MAX_PIXELS) {
-          const message = `Spritesheet skipped: ${count} frames at ${cellW}×${cellH} need ${(area / 1_000_000).toFixed(1)} Mpx. Reduce the Art size or export scale, or choose Video only.`;
+        if (cellW > SHEET_MAX_SIDE || cellH > SHEET_MAX_SIDE) {
+          const message = `Spritesheet skipped: each frame is ${cellW}×${cellH}, above the ${SHEET_MAX_SIDE}px canvas limit. Reduce the Art size or export scale, or choose Video only.`;
+          if (!wantsVideo) {
+            notify(message, 'error');
+            return;
+          }
+          wantsSheet = false;
+          notify(message, 'warn');
+        } else if (!split && area > SHEET_MAX_PIXELS) {
+          const message = `Spritesheet skipped: ${count} frames at ${cellW}×${cellH} need ${(area / 1_000_000).toFixed(1)} Mpx and sheet splitting is off. Enable Split, reduce the Art size or export scale, or choose Video only.`;
           if (!wantsVideo) {
             notify(message, 'error');
             return;
@@ -252,17 +306,18 @@ export function OutputPanel({ node }: { node: GraphNode }): React.ReactElement {
       void index;
 
       const base = activeAsset.name.replace(/\.[^.]+$/, '') || 'pixelart';
-      type SheetOutput = { png: Blob; json: string; metaText: string; sheet: ReturnType<typeof packSpritesheet> } | null;
-      let sheetOut: SheetOutput = null;
+      let sheetOutputs: SheetOutput[] = [];
       let sheetError: unknown = null;
 
       if (wantsSheet) {
         try {
           setProgress('Packing spritesheet…');
-          const sheet = packSpritesheet(frames, settings.video.spritesheet, frames.map(() => 1 / settings.video.fps));
-          const png = await pixelImageToBlob(sheet.image, 'png', 1);
-          const json = JSON.stringify(spritesheetMetadata(sheet, `${base}-sheet`, settings.video.fps), null, 2);
-          sheetOut = { png, json, metaText: json, sheet };
+          sheetOutputs = await buildSheetOutputs(
+            frames,
+            frames.map(() => 1 / settings.video.fps),
+            settings.video.fps,
+            base,
+          );
         } catch (err) {
           sheetError = err;
         }
@@ -275,16 +330,21 @@ export function OutputPanel({ node }: { node: GraphNode }): React.ReactElement {
           height: resultInfo.height,
           ext: resultInfo.extension,
         });
-        if (sheetOut && sheetOut.sheet) {
+        if (sheetOutputs.length > 0) {
           await downloadZip(
             [
               { name: file, data: resultInfo.blob },
-              { name: `${base}-sheet.png`, data: sheetOut.png },
-              { name: `${base}-sheet.json`, data: sheetOut.json },
+              ...sheetOutputs.flatMap((out) => [
+                { name: out.name, data: out.png },
+                { name: out.metaName, data: out.json },
+              ]),
             ],
             `${base}-pixelart.zip`,
           );
-          notify(`Video + spritesheet exported (${sheetOut.sheet.frames.length} frames, ${resultInfo.extension.toUpperCase()}).`, 'success');
+          notify(
+            `Video + ${sheetOutputs.length} spritesheet${sheetOutputs.length === 1 ? '' : 's'} exported (${frames.length} frames, ${resultInfo.extension.toUpperCase()}).`,
+            'success',
+          );
         } else {
           downloadBlob(resultInfo.blob, file);
           if (sheetError) {
@@ -299,10 +359,12 @@ export function OutputPanel({ node }: { node: GraphNode }): React.ReactElement {
             );
           }
         }
-      } else if (sheetOut) {
-        downloadBlob(sheetOut.png, `${base}-sheet.png`);
-        downloadText(sheetOut.json, `${base}-sheet.json`);
-        notify(`Spritesheet exported (${sheetOut.sheet.frames.length} frames, ${sheetOut.sheet.sheetWidth}×${sheetOut.sheet.sheetHeight}).`, 'success');
+      } else if (sheetOutputs.length > 0) {
+        await downloadSheetOutputs(sheetOutputs, base);
+        notify(
+          `Spritesheet exported (${sheetOutputs.length} sheet${sheetOutputs.length === 1 ? '' : 's'}, ${frames.length} frames).`,
+          'success',
+        );
       } else if (sheetError) {
         notify(`Spritesheet failed: ${sheetError instanceof Error ? sheetError.message : sheetError}`, 'error');
       }
@@ -311,6 +373,89 @@ export function OutputPanel({ node }: { node: GraphNode }): React.ReactElement {
         notify('Video export cancelled.', 'warn');
       } else {
         notify(`Video export failed: ${err instanceof Error ? err.message : err}`, 'error');
+      }
+    } finally {
+      abortRef.current = null;
+      setBusy(false);
+      setProgress(null);
+    }
+  };
+
+  const exportPrint = async (): Promise<void> => {
+    const isVideo = activeAsset?.kind === 'video' && !!activeAsset.file;
+    const videoItem = isVideo
+      ? outputItems.find((i) => i.assetId === activeAsset!.id) ?? activeItem
+      : activeItem;
+    const imageItems = outputItems.length > 0 ? outputItems : activeItem ? [activeItem] : [];
+    if ((isVideo && !videoItem) || (!isVideo && imageItems.length === 0)) {
+      notify('Add frames or a video to this output first.', 'warn');
+      return;
+    }
+
+    const controller = new AbortController();
+    abortRef.current = controller;
+    setBusy(true);
+    setProgress('Preparing print frames…');
+    try {
+      const frames: PixelImage[] = [];
+      const printSettings = { ...settingsFromItem(videoItem ?? imageItems[0]), output, video };
+
+      if (isVideo && activeAsset?.file) {
+        await extractVideoFrames(
+          activeAsset.file,
+          {
+            start,
+            end: video.end !== null ? Math.min(duration, Math.max(start + 0.05, video.end)) : duration,
+            fps: video.fps,
+            signal: controller.signal,
+            onProgress: (done, total) => setProgress(`Decoding print frame ${done} / ${total}`),
+          },
+          async (frame, i) => {
+            setProgress(`Rendering print frame ${i + 1}`);
+            const result = renderPixelArt(
+              { image: frame, masks: videoItem?.masks, settings: printSettings },
+              { upscale: false },
+            );
+            frames.push(result.art);
+          },
+        );
+      } else {
+        for (let i = 0; i < imageItems.length; i++) {
+          setProgress(`Rendering print frame ${i + 1} / ${imageItems.length}`);
+          const item = imageItems[i];
+          const result = renderPixelArt(
+            { image: item.source, masks: item.masks, settings: { ...settingsFromItem(item), output, video } },
+            { upscale: false },
+          );
+          frames.push(result.art);
+        }
+      }
+
+      if (frames.length === 0) throw new Error('No frames to print.');
+      setProgress('Laying out A4 pages…');
+      const layout = layoutPrintPages(frames, video.print);
+      const base = (activeAsset?.name ?? 'pixelart').replace(/\.[^.]+$/, '') || 'pixelart';
+      const entries: Array<{ name: string; data: Blob | string }> = [];
+      for (const page of layout.pages) {
+        setProgress(`Encoding A4 page ${page.page} / ${layout.pages.length}…`);
+        const png = await pixelImageToBlob(renderPrintPage(layout, frames, page.page - 1), 'png', 1);
+        const suffix = layout.pages.length > 1 ? `-a4-${page.page}` : '-a4';
+        entries.push({ name: `${base}-print${suffix}.png`, data: png });
+      }
+      entries.push({
+        name: `${base}-print.json`,
+        data: JSON.stringify(printMetadata(layout, base), null, 2),
+      });
+      await downloadZip(entries, `${base}-a4-print.zip`);
+      notify(
+        `A4 print exported (${layout.pages.length} page${layout.pages.length === 1 ? '' : 's'}, ${frames.length} frames, ${layout.widthMm}×${layout.heightMm} mm).`,
+        'success',
+      );
+    } catch (err) {
+      if (err instanceof DOMException && err.name === 'AbortError') {
+        notify('A4 print cancelled.', 'warn');
+      } else {
+        notify(`A4 print failed: ${err instanceof Error ? err.message : err}`, 'error');
       }
     } finally {
       abortRef.current = null;
@@ -399,6 +544,59 @@ export function OutputPanel({ node }: { node: GraphNode }): React.ReactElement {
             <Slider label="Max size" value={video.spritesheet.maxSize} min={256} max={8192} step={256} unit="px" onChange={(v) => setSheet({ maxSize: v })} />
             <Toggle label="Power of two" checked={video.spritesheet.powerOfTwo} onChange={(v) => setSheet({ powerOfTwo: v })} />
           </div>
+          <Toggle
+            label="Split into multiple sheets"
+            checked={video.spritesheet.split !== false}
+            onChange={(v) => setSheet({ split: v })}
+          />
+        </div>
+
+        <div className="inset-panel">
+          <span className="inset-title">Print / rescan (A4)</span>
+          <div className="two-col">
+            <SelectField
+              label="Orientation"
+              value={video.print.orientation}
+              options={[
+                { value: 'portrait', label: 'Portrait' },
+                { value: 'landscape', label: 'Landscape' },
+              ]}
+              onChange={(v) => setPrint({ orientation: v as PrintSettings['orientation'] })}
+            />
+            <SelectField
+              label="DPI"
+              value={String(video.print.dpi)}
+              options={[
+                { value: '150', label: '150 DPI' },
+                { value: '300', label: '300 DPI' },
+                { value: '600', label: '600 DPI' },
+              ]}
+              onChange={(v) => setPrint({ dpi: Number(v) })}
+            />
+          </div>
+          <div className="two-col">
+            <Slider label="Margin" value={video.print.marginMm} min={2} max={30} step={1} unit="mm" onChange={(v) => setPrint({ marginMm: v })} />
+            <Slider label="Gutter" value={video.print.gutterMm} min={1} max={20} step={1} unit="mm" onChange={(v) => setPrint({ gutterMm: v })} />
+          </div>
+          <div className="two-col">
+            <Slider label="+ mark" value={video.print.markMm} min={1} max={10} step={1} unit="mm" onChange={(v) => setPrint({ markMm: v })} />
+            <Segmented
+              label="Size"
+              value={video.print.scaleMode}
+              options={[
+                { value: 'actual', label: 'Actual' },
+                { value: 'fit', label: 'Fit width' },
+              ]}
+              onChange={(v) => setPrint({ scaleMode: v as PrintSettings['scaleMode'] })}
+            />
+          </div>
+          <button type="button" className="ghost-btn small" onClick={() => void exportPrint()} disabled={busy}>
+            <Icon name="download" size={14} /> Export A4 print pages
+          </button>
+          <p className="micro-copy">
+            A4 pages with black + registration marks in the gutters and a JSON frame map. Print at 100%; rescan and
+            align to the marks.
+          </p>
         </div>
 
         <div className="stat-strip">

@@ -458,13 +458,21 @@ export interface DitherContext {
   seed?: number;
 }
 
+export function ditherMatrixFor(id: string): Float32Array | null {
+  return matrixFor(id);
+}
+
+/** Amplitude (in 0..255 RGB units) used by the ordered-dither path. */
+export function orderedDitherAmplitude(palette: string[], strength: number): number {
+  return paletteSpacing(palette.map(parseHex), 'rgb') * 0.62 * clamp01(strength) * 0.5;
+}
+
 export function applyDither(
   input: PixelImage,
   palette: string[],
   settings: DitherSettings,
   ctx: DitherContext = {},
-): PixelImage {
-  const algorithm = settings.algorithm;
+): PixelImage {  const algorithm = settings.algorithm;
   if (algorithm === 'none' || palette.length === 0) return clone(input);
 
   const colors = palette.map(parseHex);

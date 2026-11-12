@@ -2,13 +2,15 @@ import React from 'react';
 import { createRoot } from 'react-dom/client';
 import { StudioProvider } from './store';
 import { App } from './App';
-import { setGlobalPixelator } from '../core/pipeline';
+import { setGlobalPixelator, setGlobalDitherFinisher } from '../core/pipeline';
 import { gpuPixelate } from './gpuPixelate';
+import { gpuDither } from './gpuFinish';
 import './styles.css';
 
-// Use the WebGL2 sampler when available; it falls back to the CPU backend
-// automatically inside the pipeline.
+// Use the WebGL2 sampler and dither finisher when available; both fall back to
+// the CPU implementation automatically inside the pipeline.
 setGlobalPixelator(gpuPixelate);
+setGlobalDitherFinisher(gpuDither);
 
 class ErrorBoundary extends React.Component<
   { children: React.ReactNode },

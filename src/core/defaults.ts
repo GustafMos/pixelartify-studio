@@ -99,6 +99,15 @@ export const DEFAULT_VIDEO: VideoSettings = {
     padding: 0,
     maxSize: 4096,
     powerOfTwo: false,
+    split: true,
+  },
+  print: {
+    orientation: 'portrait',
+    dpi: 300,
+    marginMm: 10,
+    gutterMm: 4,
+    markMm: 3,
+    scaleMode: 'actual',
   },
 };
 
@@ -116,7 +125,11 @@ export function defaultSettings(overrides: Partial<PixelArtifySettings> = {}): P
     palette: { ...DEFAULT_PALETTE, colors: [] },
     dither: { ...DEFAULT_DITHER },
     output: { ...DEFAULT_OUTPUT },
-    video: { ...DEFAULT_VIDEO, spritesheet: { ...DEFAULT_VIDEO.spritesheet } },
+    video: {
+      ...DEFAULT_VIDEO,
+      spritesheet: { ...DEFAULT_VIDEO.spritesheet },
+      print: { ...DEFAULT_VIDEO.print },
+    },
   };
   return mergeSettings(base, overrides);
 }

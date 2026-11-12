@@ -4,6 +4,7 @@ import type { GraphNode, MaskData } from '../../core/types';
 import { useStudio } from '../store';
 import { pixelImageToDataUrl } from '../io';
 import { GPU_MIN_PIXELS, gpuAvailable } from '../gpuPixelate';
+import { GPU_MIN_DITHER_PIXELS, gpuDitherAvailable, supportsGpuDither } from '../gpuFinish';
 import { Icon } from './icons';
 import { Badge, IconButton, Segmented, Slider, Spinner } from './controls';
 
@@ -17,6 +18,10 @@ export function Viewer({ resizeKey }: { resizeKey?: number | string } = {}): Rea
     videoTime,
     setVideoTime,
     videoFrameLoading,
+    videoPlaying,
+    setVideoPlaying,
+    onPlaybackFrame,
+    activeItem,
     maskEdit,
     endMaskEdit,
     setMaskEdit,
@@ -38,6 +43,10 @@ export function Viewer({ resizeKey }: { resizeKey?: number | string } = {}): Rea
   const paintRef = useRef<MaskData | null>(null);
   const paintingRef = useRef(false);
   const panRef = useRef<{ x: number; y: number; px: number; py: number } | null>(null);
+  const videoElRef = useRef<HTMLVideoElement | null>(null);
+  const videoCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const videoTimeRef = useRef(videoTime);
+  videoTimeRef.current = videoTime;
   const [scale, setScale] = useState(1);
   const [pan, setPan] = useState({ x: 0, y: 0 });
   const [showGrid, setShowGrid] = useState(true);
@@ -54,6 +63,121 @@ export function Viewer({ resizeKey }: { resizeKey?: number | string } = {}): Rea
   const artUrl = useMemo(() => (art ? pixelImageToDataUrl(art) : null), [art]);
   const gpuSampler = useMemo(() => gpuAvailable(), []);
   const gpuActive = gpuSampler && artW * artH >= GPU_MIN_PIXELS;
+  const ditherSampler = useMemo(() => gpuDitherAvailable(), []);
+  const ditherActive = Boolean(
+    ditherSampler &&
+      activeItem &&
+      artW * artH >= GPU_MIN_DITHER_PIXELS &&
+      supportsGpuDither(activeItem.dither.algorithm),
+  );
+
+  // Set up a hidden <video> used for smooth playback. The normal preview path
+  // still decodes through Mediabunny; playback bypasses it to avoid opening a
+  // decoder for every displayed frame.
+  useEffect(() => {
+    if (activeAsset?.kind !== 'video' || !activeAsset.file) {
+      setVideoPlaying(false);
+      return;
+    }
+    const url = URL.createObjectURL(activeAsset.file);
+    const el = document.createElement('video');
+    el.src = url;
+    el.muted = true;
+    el.playsInline = true;
+    el.preload = 'auto';
+    el.loop = true;
+    el.style.cssText =
+      'position:fixed;left:-4px;top:-4px;width:1px;height:1px;opacity:0;pointer-events:none;';
+    document.body.appendChild(el);
+    el.addEventListener('loadedmetadata', () => {
+      el.currentTime = Math.min(Math.max(0, videoTimeRef.current), Math.max(0, el.duration || 0));
+    });
+    videoElRef.current = el;
+    return () => {
+      setVideoPlaying(false);
+      el.pause();
+      el.removeAttribute('src');
+      el.load();
+      el.remove();
+      URL.revokeObjectURL(url);
+      if (videoElRef.current === el) videoElRef.current = null;
+    };
+  }, [activeAsset?.id, setVideoPlaying]);
+
+  // Keep the hidden element in sync while the user scrubs a paused video.
+  useEffect(() => {
+    if (videoPlaying) return;
+    const el = videoElRef.current;
+    if (!el || !Number.isFinite(el.duration)) return;
+    const target = Math.min(Math.max(0, videoTime), Math.max(0, el.duration || 0));
+    if (Math.abs(el.currentTime - target) > 0.08) el.currentTime = target;
+  }, [videoTime, videoPlaying, activeAsset?.id]);
+
+  useEffect(() => {
+    if (!videoPlaying) return;
+    const el = videoElRef.current;
+    if (!el) {
+      setVideoPlaying(false);
+      return;
+    }
+    const canvas = videoCanvasRef.current ?? document.createElement('canvas');
+    videoCanvasRef.current = canvas;
+    const ctx = canvas.getContext('2d', { willReadFrequently: true });
+    if (!ctx) {
+      setVideoPlaying(false);
+      return;
+    }
+    let raf = 0;
+    let lastSample = 0;
+    const tick = () => {
+      const video = videoElRef.current;
+      if (!video) return;
+      const now = performance.now();
+      if (now - lastSample >= 55 && video.videoWidth > 0) {
+        lastSample = now;
+        const maxSide = 960;
+        const s = Math.min(1, maxSide / Math.max(video.videoWidth, video.videoHeight));
+        const w = Math.max(1, Math.round(video.videoWidth * s));
+        const h = Math.max(1, Math.round(video.videoHeight * s));
+        if (canvas.width !== w || canvas.height !== h) {
+          canvas.width = w;
+          canvas.height = h;
+        }
+        ctx.drawImage(video, 0, 0, w, h);
+        const data = ctx.getImageData(0, 0, w, h);
+        onPlaybackFrame(
+          { width: w, height: h, data: new Uint8ClampedArray(data.data) },
+          video.currentTime,
+        );
+      }
+      raf = requestAnimationFrame(tick);
+    };
+    el.loop = true;
+    void el.play().catch(() => {
+      setVideoPlaying(false);
+      notify('Could not play this video in the browser.', 'warn');
+    });
+    raf = requestAnimationFrame(tick);
+    return () => {
+      cancelAnimationFrame(raf);
+      el.pause();
+    };
+  }, [videoPlaying, onPlaybackFrame, notify, setVideoPlaying]);
+
+  const togglePlayback = useCallback(() => {
+    const el = videoElRef.current;
+    if (!el) return;
+    if (videoPlaying) {
+      setVideoPlaying(false);
+      setVideoTime(el.currentTime);
+      return;
+    }
+    if (Number.isFinite(el.duration)) {
+      const target = Math.min(Math.max(0, videoTime), Math.max(0, el.duration || 0));
+      if (Math.abs(el.currentTime - target) > 0.05) el.currentTime = target;
+    }
+    setVideoPlaying(true);
+  }, [videoPlaying, videoTime, setVideoPlaying, setVideoTime]);
 
   const fit = useCallback(
     (size?: { width: number; height: number }) => {
@@ -282,6 +406,7 @@ export function Viewer({ resizeKey }: { resizeKey?: number | string } = {}): Rea
           <Badge tone={gpuActive ? 'success' : 'neutral'}>
             {gpuActive ? 'GPU sampler' : gpuSampler ? 'CPU sampler (small)' : 'CPU sampler'}
           </Badge>
+          {ditherActive ? <Badge tone="success">GPU dither</Badge> : null}
         </div>
         <div className="viewer-toolbar-right">
           <IconButton
@@ -488,6 +613,12 @@ export function Viewer({ resizeKey }: { resizeKey?: number | string } = {}): Rea
 
       {activeAsset?.kind === 'video' && activeAsset.duration ? (
         <div className="video-timeline">
+          <IconButton
+            icon={videoPlaying ? 'pause' : 'play'}
+            label={videoPlaying ? 'Pause video' : 'Play video'}
+            size={16}
+            onClick={togglePlayback}
+          />
           <Icon name="film" size={15} />
           <input
             type="range"
@@ -495,13 +626,18 @@ export function Viewer({ resizeKey }: { resizeKey?: number | string } = {}): Rea
             max={activeAsset.duration}
             step={1 / Math.max(1, activeAsset.fps ?? 24)}
             value={Math.min(videoTime, activeAsset.duration)}
-            onChange={(e) => setVideoTime(Number(e.target.value))}
+            onChange={(e) => {
+              const next = Number(e.target.value);
+              setVideoTime(next);
+              const video = videoElRef.current;
+              if (video && Number.isFinite(video.duration)) video.currentTime = next;
+            }}
             aria-label="Video time"
           />
           <span className="time-readout">
             {videoTime.toFixed(2)} / {activeAsset.duration.toFixed(2)} s
           </span>
-          {videoFrameLoading ? <Spinner /> : null}
+          {videoFrameLoading && !videoPlaying ? <Spinner /> : null}
         </div>
       ) : null}
     </div>

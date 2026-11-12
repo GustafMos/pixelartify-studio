@@ -14,6 +14,8 @@ export interface SpritesheetOptions {
   padding: number;
   maxSize: number;
   powerOfTwo: boolean;
+  /** Optional: split the result into several sheets. Defaults to true. */
+  split?: boolean;
 }
 
 export interface SpritesheetFrameMeta {
@@ -180,8 +182,68 @@ export function packSpritesheet(
   };
 }
 
-function blit(dst: PixelImage, src: PixelImage, x: number, y: number): void {
-  for (let sy = 0; sy < src.height; sy++) {
+/**
+ * Pack frames into one or more sheets. When a single sheet would exceed the
+ * requested max size (or the hard canvas budget), frames are chunked onto
+ * additional sheets using the same compatible grid.
+ */
+export function packSpritesheets(
+  frames: PixelImage[],
+  options: SpritesheetOptions,
+  durations: number[] = [],
+): SpritesheetResult[] {
+  if (frames.length === 0) throw new Error('No frames to pack.');
+  const opts = (options ?? {}) as Partial<SpritesheetOptions>;
+  if (opts.split === false) return [packSpritesheet(frames, opts as SpritesheetOptions, durations)];
+
+  const cellW = Math.max(...frames.map((f) => f.width));
+  const cellH = Math.max(...frames.map((f) => f.height));
+  if (!Number.isFinite(cellW) || !Number.isFinite(cellH) || cellW < 1 || cellH < 1) {
+    throw new Error('Spritesheet frames have an invalid size.');
+  }
+  const rawPadding = Number(opts.padding);
+  const padding = Math.max(0, Math.min(256, Math.round(Number.isFinite(rawPadding) ? rawPadding : 0)));
+  const rawMax = Number(opts.maxSize);
+  const maxSize = Math.max(
+    64,
+    Math.min(SHEET_MAX_SIDE, Math.round(Number.isFinite(rawMax) ? rawMax : 4096)),
+  );
+  const count = frames.length;
+  const requested = Number(opts.columns);
+  const maxColsBySize = Math.max(1, Math.floor((maxSize + padding) / (cellW + padding)));
+  const columns =
+    Number.isFinite(requested) && requested > 0
+      ? Math.min(count, Math.round(requested), maxColsBySize)
+      : Math.min(count, maxColsBySize, Math.max(1, Math.round(Math.sqrt(count))));
+
+  const sheetW = columns * cellW + (columns - 1) * padding;
+  const maxRowsBySize = Math.max(1, Math.floor((maxSize + padding) / (cellH + padding)));
+  const maxRowsByBudget = Math.max(
+    1,
+    Math.floor(SHEET_MAX_PIXELS / Math.max(1, sheetW * (cellH + padding))),
+  );
+  const rowsPerSheet = Math.min(maxRowsBySize, maxRowsByBudget);
+  const perSheet = Math.max(1, columns * rowsPerSheet);
+
+  if (perSheet >= count) {
+    return [packSpritesheet(frames, { ...opts, columns } as SpritesheetOptions, durations)];
+  }
+
+  const out: SpritesheetResult[] = [];
+  for (let start = 0; start < count; start += perSheet) {
+    const chunk = frames.slice(start, start + perSheet);
+    out.push(
+      packSpritesheet(
+        chunk,
+        { ...opts, columns } as SpritesheetOptions,
+        durations.slice(start, start + perSheet),
+      ),
+    );
+  }
+  return out;
+}
+
+function blit(dst: PixelImage, src: PixelImage, x: number, y: number): void {  for (let sy = 0; sy < src.height; sy++) {
     const dy = y + sy;
     if (dy < 0 || dy >= dst.height) continue;
     for (let sx = 0; sx < src.width; sx++) {

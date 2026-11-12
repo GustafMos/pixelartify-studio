@@ -19,7 +19,7 @@ PixelArtify Studio turns drawings, photos and videos into deliberate pixel art. 
 ## Highlights
 
 - **Visual node graph** — multiple media inputs (folders or multi-selections), branching chains, merged batches and multiple output nodes. Drag a node over an existing wire to splice it into that connection automatically.
-- **GPU-accelerated sampler** — a WebGL2 backend runs the edge alignment search, offset smoothing and dominant-colour sampling in parallel, with the CPU integral/edge maps shared and automatic fallback. Expect roughly 2× faster previews on large images; small jobs stay on the CPU where setup would dominate.
+- **GPU-accelerated sampler and dithering** — a WebGL2 backend runs the edge alignment search, offset smoothing, dominant-colour sampling, palette matching and matrix dithering in parallel, with automatic CPU fallback. Error-diffusion dithering is sequential and stays on the CPU. Expect roughly 2× faster previews on large images and smoother video playback.
 - **Color Correct node** — exposure, contrast, brightness, saturation, gamma, hue, temperature and tint, with look presets. Alpha is preserved and several Color Correct nodes can be chained for an ordered grade.
 - **Split workspace** — a Blender-style viewer + node graph layout with a draggable divider, plus full Studio and Graph tabs.
 - **Edge-aware sampling** — the sampler searches for cell windows that avoid cutting through edges, then blends an area average with the dominant local colour. Inspired by [pixel-mosaic](https://github.com/yogthos/pixel-mosaic).
@@ -30,7 +30,7 @@ PixelArtify Studio turns drawings, photos and videos into deliberate pixel art. 
 - **8 post-processing effects** — sprite outline, bloom, grain, scanlines, vignette, chromatic aberration, CRT and final sharpen.
 - **Crop, resize and channels** — nearest/bilinear/box/bicubic/Lanczos3 resampling, alpha-safe; channel extract/swap/pack, luma↔alpha and HSL→RGB channel encoding.
 - **Layer extraction and inpainting** — saliency, subject box/ellipse, chroma key, luma, edge and manual masks. Background layers inpaint occluded regions with directional/mirrored fill, diffusion or dithered regeneration. Separate occlusion masks keep foregrounds tight while removing legs and shadows from the background.
-- **Video in, video / spritesheet out** — frame-accurate WebCodecs decoding via [Mediabunny](https://mediabunny.dev), H.264/VP9/AV1 encoding, spritesheet packing with metadata, or both in one ZIP.
+- **Video in, video / spritesheet out** — frame-accurate WebCodecs decoding via [Mediabunny](https://mediabunny.dev), H.264/VP9/AV1 encoding, spritesheet packing with metadata, or both in one ZIP. Long animations are split across several sheets, and A4 print pages with + registration marks are available for printing and rescanning.
 - **Presets** — save/import/export the whole graph. Built-ins include Sharp Sprite, Painterly Mosaic, 1-bit Ink, Game Boy DMG, Cinematic 32, Layered Parallax, Spritesheet Export, Chunky Sweetie and Batch Portraits.
 - **Batch CLI** — folders of images, graph evaluation, video processing with ffmpeg, layer manifests and spritesheets.
 
@@ -61,7 +61,7 @@ Open <http://localhost:5173>. Everything runs locally. Drop images or videos ont
 
 ```bash
 npm run build      # typecheck + production build
-npm run test       # 32 core tests
+npm run test       # 34 core tests
 npm run cli -- --help
 npm run build:cli  # bundle the headless CLI
 ```
@@ -104,14 +104,19 @@ The **Split** tab shows the viewer and the node graph at the same time with a dr
 
 The viewer's **Fit preview** button (active by default) keeps the image fitted with a small padding whenever you resize the split divider, switch tabs or resize the window. Zooming or panning turns auto-fit off; click the fit button to re-enable it.
 
+Video assets get a **play/pause** button next to the timeline. Playback uses a hidden `<video>` element for smooth decoding, renders at a reduced preview resolution, reuses the palette from the first frame to avoid flicker and extraction cost, and loops until paused. Scrubbing while paused shows a full-quality frame.
+
 ### Performance
 
-The heaviest part of the pipeline — the per-cell edge-alignment search, offset smoothing and dominant-colour sampling — runs on the GPU through WebGL2 when available. The CPU still builds the integral and edge maps and handles resizing, pre-blur, palettes, dithering and post effects, so the accelerator focuses on the stage that scales with art pixels:
+The heaviest parts of the pipeline run on the GPU through WebGL2 when available:
 
+- **Pixelation** — per-cell edge-alignment search, offset smoothing and dominant-colour sampling.
+- **Dithering** — palette matching and every matrix-based algorithm (Bayer, blue noise, clustered dot, line, checker, dot, crosshatch, white noise, threshold) are evaluated per pixel in a shader. Error-diffusion algorithms (Floyd–Steinberg, Atkinson, …) are inherently sequential and stay on the CPU.
 - Typical end-to-end previews are about **2× faster** on large images (measured 326 → 156 ms at 405×270 art and 1.92 → 0.97 s at 1080×720 on a mid-range GPU).
-- Output matches the CPU sampler to within a couple of 8-bit levels on almost all pixels (mean error below 0.1).
-- Jobs under ~48k art pixels stay on the CPU, where texture setup and readback would dominate; the viewer badge shows which backend rendered the current preview.
-- If WebGL2 or float render targets are unavailable, the pipeline falls back to the CPU automatically without changing the result.
+- GPU dithering matches the CPU exactly for ordered/pattern algorithms in flat-region tests; isolated palette ties differ by one palette entry on roughly 1–2% of pixels due to float precision.
+- Jobs under ~48k art pixels (sampling) or ~24k art pixels (dithering) stay on the CPU, where upload/readback would dominate. The viewer shows `GPU sampler` and `GPU dither` badges when each backend is active.
+- If WebGL2 is unavailable, the pipeline falls back to the CPU automatically.
+- During video playback the palette is resolved once and reused, and the working resolution is reduced; typical 480×270 art previews play at roughly 8 rendered fps on a laptop.
 
 ### Resolution independence
 
@@ -141,7 +146,7 @@ A preset stores the entire node graph (including crop/resize/channel nodes), pal
 npm run cli -- input-folder -o out --preset layered-parallax --height 270 --layers
 ```
 
-Save/load presets from the top bar. Import/export `.pixelartify.json` files. User presets and palettes persist in `localStorage`.
+Save/load presets from the top bar. Import/export `.pixelartify.json` files. User presets and palettes persist in `localStorage`. Applying a preset keeps the current Studio/Split/Node graph tab instead of forcing a view change.
 
 ---
 
@@ -199,7 +204,8 @@ Layer offsets and scales are in art pixels, ready for parallax rigs.
 Import a video into a Media input. The Studio shows a scrubbable frame preview. The Output node can produce:
 
 - **Video** — MP4 (H.264 or AV1) or WebM (VP9), using WebCodecs + Mediabunny, with the original audio muxed in the CLI.
-- **Spritesheet** — PNG sheet + JSON metadata (frames, source size, duration, columns, rows, cell size). Explicit column counts are honoured; auto mode picks the most square layout that fits the max size. If a long video at a high export scale would exceed canvas limits, the sheet is skipped with a clear warning and the video is still exported.
+- **Spritesheet** — PNG sheet + JSON metadata (frames, source size, duration, columns, rows, cell size). Explicit column counts are honoured; auto mode picks the most square layout that fits the max size. With **Split into multiple sheets** enabled, long animations are packed onto as many sheets as needed instead of failing; each sheet gets its own PNG and JSON in a ZIP.
+- **A4 print / rescan** — export white A4 pages at 150/300/600 DPI with a configurable margin, gutter and black **+** registration marks at every cell corner. The JSON map records each frame's page and pixel rectangle. Print at 100%, rescan, and align to the marks.
 - **Both** — downloaded together as a ZIP.
 
 For production video, the CLI uses the bundled ffmpeg for frame extraction and final encoding, preserving the original audio.
@@ -292,7 +298,7 @@ The core is DOM-free. The browser UI, the CLI and future workers all call the sa
 npm run test
 ```
 
-Covered: resolution independence, resampling/alpha correctness, palette formats and extraction, dither palette exactness and determinism, render pipeline, layer inpainting, crop/resize/channel graph nodes, cycle detection, preset round-trip and upscaling.
+Covered: resolution independence, resampling/alpha correctness, palette formats and extraction, dither palette exactness and determinism, render pipeline, layer inpainting, crop/resize/channel/color graph nodes, cycle detection, preset round-trip, multi-sheet splitting, A4 registration-mark layout and upscaling.
 
 ---
 

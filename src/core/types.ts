@@ -257,6 +257,25 @@ export interface SpritesheetSettings {
   padding: number;
   maxSize: number;
   powerOfTwo: boolean;
+  /** Split frames across several sheets when one would exceed limits. */
+  split: boolean;
+}
+
+export type PrintOrientation = 'portrait' | 'landscape';
+export type PrintScaleMode = 'actual' | 'fit';
+
+export interface PrintSettings {
+  orientation: PrintOrientation;
+  /** Output resolution of the A4 page. */
+  dpi: number;
+  /** Paper margin in millimetres. */
+  marginMm: number;
+  /** Space between frames in millimetres (contains the + registration marks). */
+  gutterMm: number;
+  /** Arm length of each + mark in millimetres. */
+  markMm: number;
+  /** Actual-size pixels or scale up to fill the page. */
+  scaleMode: PrintScaleMode;
 }
 
 export interface VideoSettings {
@@ -268,6 +287,7 @@ export interface VideoSettings {
   codec: VideoCodec;
   bitrateMbps: number;
   spritesheet: SpritesheetSettings;
+  print: PrintSettings;
 }
 
 export interface PixelArtifySettings {
