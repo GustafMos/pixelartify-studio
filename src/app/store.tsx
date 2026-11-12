@@ -37,7 +37,13 @@ import {
   parsePreset,
   renderPixelArt,
 } from '../core';
-import { NODE_DEFS, createDefaultGraph, type GraphAsset, type GraphMediaItem } from '../core/graph';
+import {
+  NODE_DEFS,
+  createDefaultGraph,
+  deleteNodePreservingGraph,
+  type GraphAsset,
+  type GraphMediaItem,
+} from '../core/graph';
 import { loadGraph, saveGraph, loadUserPresets, saveUserPresets, loadUserPalettes, saveUserPalettes, loadActivePaletteId, saveActivePaletteId, loadUiMode, saveUiMode } from './storage';
 import {
   decodeImageFile,
@@ -95,7 +101,7 @@ interface StudioContextValue {
   isRendering: boolean;
   isImporting: boolean;
   previewFullQuality: boolean;
-  mode: 'studio' | 'graph';
+  mode: 'studio' | 'split' | 'graph';
   evaluation: ReturnType<typeof evaluateGraph>;
   graphErrors: ReturnType<typeof validateGraph>;
   presets: Preset[];
@@ -110,7 +116,7 @@ interface StudioContextValue {
   videoFrameLoading: boolean;
   paletteStudioOpen: boolean;
   toasts: Toast[];
-  setMode: (mode: 'studio' | 'graph') => void;
+  setMode: (mode: 'studio' | 'split' | 'graph') => void;
   selectNode: (id: string | null) => void;
   setSelectedOutput: (id: string) => void;
   setActiveAsset: (id: string) => void;
@@ -177,7 +183,7 @@ export function StudioProvider({ children }: { children: React.ReactNode }): Rea
   const [activeAssetId, setActiveAssetIdState] = useState<string | null>(null);
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [selectedOutputId, setSelectedOutputId] = useState<string | null>(null);
-  const [mode, setModeState] = useState<'studio' | 'graph'>(() => loadUiMode());
+  const [mode, setModeState] = useState<'studio' | 'split' | 'graph'>(() => loadUiMode());
   const [preview, setPreview] = useState<RenderResult | null>(null);
   const [previewError, setPreviewError] = useState<string | null>(null);
   const [isRendering, setIsRendering] = useState(false);
@@ -302,8 +308,9 @@ export function StudioProvider({ children }: { children: React.ReactNode }): Rea
   const graphErrors = useMemo(() => validateGraph(graph), [graph]);
 
   const previewNodeId = useMemo(() => {
-    if (mode === 'studio') return selectedOutputId;
-    return selectedNodeId;
+    if (mode === 'graph') return selectedNodeId;
+    // Studio and Split both preview the selected Output node.
+    return selectedOutputId;
   }, [mode, selectedNodeId, selectedOutputId]);
 
   const previewNode = useMemo(
@@ -401,7 +408,7 @@ export function StudioProvider({ children }: { children: React.ReactNode }): Rea
     return () => window.clearTimeout(timer);
   }, [activeAsset, videoTime, notify]);
 
-  const setMode = useCallback((next: 'studio' | 'graph') => {
+  const setMode = useCallback((next: 'studio' | 'split' | 'graph') => {
     setModeState(next);
     if (next === 'studio' && selectedOutputId) setSelectedNodeId(selectedOutputId);
   }, [selectedOutputId]);
@@ -475,11 +482,13 @@ export function StudioProvider({ children }: { children: React.ReactNode }): Rea
   }, [graph.nodes, mutateGraph]);
 
   const deleteNode = useCallback((id: string) => {
-    mutateGraph((g) => ({
-      ...g,
-      nodes: g.nodes.filter((n) => n.id !== id),
-      edges: g.edges.filter((e) => e.fromNode !== id && e.toNode !== id),
-    }));
+    const result = deleteNodePreservingGraph(graph, id);
+    mutateGraph(() => result.graph);
+    if (result.routerAdded) {
+      notify('Node deleted. A Router was inserted to preserve the branches.', 'info');
+    } else if (result.bridged > 0) {
+      notify('Node deleted. Connections were bridged automatically.', 'info');
+    }
     setSelectedNodeId((current) => (current === id ? null : current));
     setMaskOverrides((prev) => {
       const next = { ...prev };
@@ -487,7 +496,7 @@ export function StudioProvider({ children }: { children: React.ReactNode }): Rea
       return next;
     });
     setMaskEditState((current) => (current?.nodeId === id ? null : current));
-  }, [mutateGraph]);
+  }, [graph, mutateGraph, notify]);
 
   const updateNode = useCallback((id: string, patch: Partial<GraphNode>) => {
     mutateGraph(

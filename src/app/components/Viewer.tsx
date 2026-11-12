@@ -66,6 +66,16 @@ export function Viewer(): React.ReactElement {
 
   useEffect(() => {
     const el = viewportRef.current;
+    if (!el || typeof ResizeObserver === 'undefined') return;
+    const observer = new ResizeObserver(() => {
+      if (fitZoom) fit();
+    });
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [fit, fitZoom]);
+
+  useEffect(() => {
+    const el = viewportRef.current;
     if (!el) return;
     const onWheel = (e: WheelEvent): void => {
       if (maskEdit) return;

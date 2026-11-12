@@ -278,6 +278,7 @@ export type GraphNodeType =
   | 'compose'
   | 'postprocess'
   | 'merge'
+  | 'router'
   | 'output';
 
 export interface GraphNode {

@@ -5,6 +5,7 @@ import { AssetRail } from './components/AssetRail';
 import { GraphCanvas } from './components/GraphCanvas';
 import { Inspector } from './components/Inspector';
 import { Viewer } from './components/Viewer';
+import { SplitView } from './components/SplitView';
 import { PaletteStudio } from './components/PaletteStudio';
 import { Toasts } from './components/Toasts';
 import { Icon } from './components/icons';
@@ -66,7 +67,7 @@ export function App(): React.ReactElement {
       if (!e.ctrlKey && !e.metaKey && !e.altKey) {
         if (e.key.toLowerCase() === 'g') {
           e.preventDefault();
-          setMode(mode === 'graph' ? 'studio' : 'graph');
+          setMode(mode === 'studio' ? 'split' : mode === 'split' ? 'graph' : 'studio');
           return;
         }
         if ((e.key === 'Delete' || e.key === 'Backspace') && selectedNodeId) {
@@ -86,7 +87,7 @@ export function App(): React.ReactElement {
       <div className="workspace">
         <AssetRail />
         <main className="main-area">
-          {mode === 'studio' ? <Viewer /> : <GraphCanvas />}
+          {mode === 'studio' ? <Viewer /> : mode === 'graph' ? <GraphCanvas /> : <SplitView />}
         </main>
         <Inspector />
       </div>

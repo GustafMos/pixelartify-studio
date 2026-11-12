@@ -12,6 +12,7 @@ import { DitherPanel } from './inspectors/DitherPanel';
 import { ExtractPanel, ComposePanel } from './inspectors/LayerPanels';
 import { PreprocessPanel, PostprocessPanel } from './inspectors/EffectPanels';
 import { OutputPanel } from './inspectors/OutputPanel';
+import { ConnectionsPanel } from './ConnectionsPanel';
 
 export function Inspector(): React.ReactElement {
   const {
@@ -88,6 +89,7 @@ export function Inspector(): React.ReactElement {
       </div>
 
       <div className="inspector-scroll">
+        <ConnectionsPanel node={selectedNode} />
         {renderPanel(selectedNode)}
       </div>
     </aside>
@@ -122,6 +124,8 @@ function renderPanel(node: GraphNode): React.ReactElement {
       return <OutputPanel node={node} />;
     case 'merge':
       return <MergePanel node={node} />;
+    case 'router':
+      return <RouterPanel node={node} />;
     default:
       return <div />;
   }
@@ -165,6 +169,53 @@ function MergePanel({ node }: { node: GraphNode }): React.ReactElement {
   );
 }
 
+function RouterPanel({ node }: { node: GraphNode }): React.ReactElement {
+  const { graph } = useStudio();
+  const inputs = graph.edges.filter((e) => e.toNode === node.id);
+  const outputs = graph.edges.filter((e) => e.fromNode === node.id);
+  const byType = (type: string): [number, number] => [
+    inputs.filter((e) => e.toPort === type).length,
+    outputs.filter((e) => e.fromPort === type).length,
+  ];
+  return (
+    <div className="inspector-panel">
+      <div className="stat-strip">
+        <div>
+          <span>Media</span>
+          <strong>
+            {byType('media')[0]} in → {byType('media')[1]} out
+          </strong>
+        </div>
+        <div>
+          <span>Masks</span>
+          <strong>
+            {byType('mask')[0]} in → {byType('mask')[1]} out
+          </strong>
+        </div>
+        <div>
+          <span>Palettes</span>
+          <strong>
+            {byType('palette')[0]} in → {byType('palette')[1]} out
+          </strong>
+        </div>
+      </div>
+      <div className="info-callout">
+        <Icon name="link" size={16} />
+        <span>
+          Router does nothing to the image. It only forwards media, masks and palettes. Use it to keep a
+          branch alive while you replace, bypass or delete a node.
+        </span>
+      </div>
+      {inputs.length === 0 || outputs.length === 0 ? (
+        <p className="micro-copy">
+          Connect an upstream output to its matching input, then connect the router output to the rest of
+          the tree.
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
 function nodeIcon(type: GraphNode['type']): Parameters<typeof Icon>[0]['name'] {
   const map: Record<GraphNode['type'], Parameters<typeof Icon>[0]['name']> = {
     input: 'image',
@@ -179,6 +230,7 @@ function nodeIcon(type: GraphNode['type']): Parameters<typeof Icon>[0]['name'] {
     compose: 'layers',
     postprocess: 'settings',
     merge: 'link',
+    router: 'link',
     output: 'download',
   };
   return map[type];

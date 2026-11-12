@@ -29,6 +29,7 @@ const TYPE_ICON: Record<GraphNodeType, IconName> = {
   compose: 'layers',
   postprocess: 'settings',
   merge: 'link',
+  router: 'link',
   output: 'download',
 };
 
@@ -94,6 +95,8 @@ function summaryFor(node: GraphNode, assetCount: number): string {
     }
     case 'merge':
       return 'concatenate batches';
+    case 'router':
+      return 'pass-through reroute';
     case 'output': {
       const output = p.output as { format?: string } | undefined;
       const video = p.video as { output?: string } | undefined;
@@ -124,6 +127,7 @@ interface DragState {
 interface LinkState {
   fromNode: string;
   fromPort: string;
+  fromSide: 'out' | 'in';
   type: string;
   x: number;
   y: number;
@@ -160,6 +164,7 @@ export function GraphCanvas(): React.ReactElement {
   const linkRef = useRef<LinkState | null>(null);
   const [addOpen, setAddOpen] = useState(false);
   const [addSearch, setAddSearch] = useState('');
+  const [hoverEdgeId, setHoverEdgeId] = useState<string | null>(null);
   const userMovedRef = useRef(false);
 
   const setLinkState = useCallback((next: LinkState | null) => {
@@ -291,14 +296,19 @@ export function GraphCanvas(): React.ReactElement {
   }, [pan]);
 
   const finishLink = useCallback(
-    (toNode: string, toPort: string, toType: string): boolean => {
+    (toNode: string, toPort: string, toType: string, toSide: 'out' | 'in'): boolean => {
       const current = linkRef.current;
       if (!current) return false;
       if (current.type !== toType) return false;
-      // Clear first so the input's handler and the global pointerup handler
-      // cannot create the same edge twice.
+      // Always connect an output to an input, regardless of which end the
+      // user started dragging from.
+      if (current.fromSide === toSide) return false;
       setLinkState(null);
-      addEdge(current.fromNode, current.fromPort, toNode, toPort);
+      if (current.fromSide === 'out') {
+        addEdge(current.fromNode, current.fromPort, toNode, toPort);
+      } else {
+        addEdge(toNode, toPort, current.fromNode, current.fromPort);
+      }
       return true;
     },
     [addEdge, setLinkState],
@@ -329,13 +339,16 @@ export function GraphCanvas(): React.ReactElement {
       if (!current) return;
       const target = document
         .elementFromPoint(e.clientX, e.clientY)
-        ?.closest('[data-port-in]') as HTMLElement | null;
+        ?.closest(
+          current.fromSide === 'out' ? '[data-port-in]' : '[data-port-out-row]',
+        ) as HTMLElement | null;
       if (target) {
         const nodeId = target.dataset.nodeId;
         const portId = target.dataset.portId;
         const portType = target.dataset.portType;
         if (nodeId && portId && portType) {
-          if (finishLink(nodeId, portId, portType)) return;
+          const toSide = current.fromSide === 'out' ? 'in' : 'out';
+          if (finishLink(nodeId, portId, portType, toSide)) return;
         }
       }
       // A quick click on the output port enters "pending" mode: the next input
@@ -366,18 +379,27 @@ export function GraphCanvas(): React.ReactElement {
     return () => window.removeEventListener('keydown', onKey);
   }, [link, setLinkState]);
 
-  const startLink = (node: GraphNode, port: string, type: string, e: React.PointerEvent): void => {
+  const startLink = (
+    node: GraphNode,
+    port: string,
+    type: string,
+    e: React.PointerEvent,
+    side: 'out' | 'in',
+  ): void => {
     e.stopPropagation();
     e.preventDefault();
+    if (linkRef.current) return;
     const pos = effectivePositions.get(node.id)!;
     const def = NODE_DEFS[node.type];
-    const idx = def.outputs.findIndex((p) => p.id === port);
+    const ports = side === 'out' ? def.outputs : def.inputs;
+    const idx = ports.findIndex((p) => p.id === port);
     setLinkState({
       fromNode: node.id,
       fromPort: port,
+      fromSide: side,
       type,
-      x: pos.x + NODE_WIDTH - PORT_DOT_INSET,
-      y: pos.y + HEADER_H + PORT_START + idx * PORT_STEP + PORT_ROW_CENTER,
+      x: side === 'out' ? pos.x + NODE_WIDTH - PORT_DOT_INSET : pos.x + PORT_DOT_INSET,
+      y: pos.y + HEADER_H + PORT_START + Math.max(0, idx) * PORT_STEP + PORT_ROW_CENTER,
       startX: e.clientX,
       startY: e.clientY,
       moved: false,
@@ -528,26 +550,67 @@ export function GraphCanvas(): React.ReactElement {
               const dx = Math.max(50, Math.abs(x2 - x1) * 0.45);
               const d = `M ${x1} ${y1} C ${x1 + dx} ${y1}, ${x2 - dx} ${y2}, ${x2} ${y2}`;
               const color = edgeColor(outPort.type);
+              const midX = (x1 + x2) / 2;
+              const midY = (y1 + y2) / 2;
               return (
                 <g key={edge.id} className="graph-edge">
-                  <path d={d} className="edge-hit" onDoubleClick={() => deleteEdge(edge.id)}>
-                    <title>Double-click to disconnect</title>
+                  <path
+                    d={d}
+                    className="edge-hit"
+                    onPointerEnter={() => setHoverEdgeId(edge.id)}
+                    onPointerLeave={() =>
+                      setHoverEdgeId((current) => (current === edge.id ? null : current))
+                    }
+                    onDoubleClick={() => {
+                      deleteEdge(edge.id);
+                      setHoverEdgeId(null);
+                    }}
+                  >
+                    <title>Hover to cut · double-click to disconnect</title>
                   </path>
                   <path d={d} stroke={color} className="edge-line" />
                   <circle cx={x2} cy={y2} r="3.5" fill={color} />
+                  {hoverEdgeId === edge.id ? (
+                    <g
+                      className="edge-cut"
+                      transform={`translate(${midX}, ${midY})`}
+                      onPointerEnter={() => setHoverEdgeId(edge.id)}
+                      onPointerLeave={() =>
+                        setHoverEdgeId((current) => (current === edge.id ? null : current))
+                      }
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        deleteEdge(edge.id);
+                        setHoverEdgeId(null);
+                      }}
+                    >
+                      <circle r="9" />
+                      <path d="M -3.2 -3.2 L 3.2 3.2 M 3.2 -3.2 L -3.2 3.2" />
+                      <title>Disconnect</title>
+                    </g>
+                  ) : null}
                 </g>
               );
             })}
-            {link ? (
-              <path
-                d={`M ${effectivePositions.get(link.fromNode)!.x + NODE_WIDTH - PORT_DOT_INSET} ${
-                  effectivePositions.get(link.fromNode)!.y + HEADER_H + PORT_START + PORT_ROW_CENTER +
-                  Math.max(0, NODE_DEFS[graph.nodes.find((n) => n.id === link.fromNode)!.type].outputs.findIndex((p) => p.id === link.fromPort)) * PORT_STEP
-                } C ${link.x} ${link.y}, ${link.x} ${link.y}, ${link.x} ${link.y}`}
-                stroke={edgeColor(link.type)}
-                className="edge-line edge-temp"
-              />
-            ) : null}
+            {link
+              ? (() => {
+                  const linkNode = graph.nodes.find((n) => n.id === link.fromNode);
+                  if (!linkNode) return null;
+                  const linkDef = NODE_DEFS[linkNode.type];
+                  const ports = link.fromSide === 'out' ? linkDef.outputs : linkDef.inputs;
+                  const idx = Math.max(0, ports.findIndex((p) => p.id === link.fromPort));
+                  const pos = effectivePositions.get(link.fromNode)!;
+                  const sx = link.fromSide === 'out' ? pos.x + NODE_WIDTH - PORT_DOT_INSET : pos.x + PORT_DOT_INSET;
+                  const sy = pos.y + HEADER_H + PORT_START + PORT_ROW_CENTER + idx * PORT_STEP;
+                  return (
+                    <path
+                      d={`M ${sx} ${sy} C ${link.x} ${link.y}, ${link.x} ${link.y}, ${link.x} ${link.y}`}
+                      stroke={edgeColor(link.type)}
+                      className="edge-line edge-temp"
+                    />
+                  );
+                })()
+              : null}
           </svg>
 
           {graph.nodes.map((node) => {
@@ -631,46 +694,76 @@ export function GraphCanvas(): React.ReactElement {
                 </div>
 
                 <div className="node-ports" style={{ height: portCount * PORT_STEP + 16 }}>
-                  {def.inputs.map((port, i) => (
-                    <div
-                      key={port.id}
-                      className={`node-port node-port-in ${
-                        link ? (link.type === port.type ? 'is-compatible' : 'is-incompatible') : ''
-                      }`}
-                      style={{ top: PORT_START + i * PORT_STEP }}
-                      data-port-in="true"
-                      data-node-id={node.id}
-                      data-port-id={port.id}
-                      data-port-type={port.type}
-                      title={`${port.label} (${port.type}) — drop a connection here`}
-                      onPointerUp={() => finishLink(node.id, port.id, port.type)}
-                    >
-                      <button
-                        type="button"
-                        className={`port-dot port-${port.type}`}
-                        aria-hidden="true"
-                        tabIndex={-1}
-                      />
-                      <span>{port.label}</span>
-                      {port.multiple ? <em>multi</em> : null}
-                    </div>
-                  ))}
-                  {def.outputs.map((port, i) => (
-                    <div
-                      key={port.id}
-                      className="node-port node-port-out"
-                      style={{ top: PORT_START + i * PORT_STEP }}
-                    >
-                      <span>{port.label}</span>
-                      <button
-                        type="button"
-                        className={`port-dot port-${port.type}`}
-                        title={`Drag from ${port.label} (${port.type}) to an input port`}
-                        data-port-out="true"
-                        onPointerDown={(e) => startLink(node, port.id, port.type, e)}
-                      />
-                    </div>
-                  ))}
+                  {def.inputs.map((port, i) => {
+                      const isSource =
+                        link?.fromNode === node.id &&
+                        link.fromPort === port.id &&
+                        link.fromSide === 'in';
+                      const compatible = Boolean(link && link.fromSide === 'out' && link.type === port.type);
+                      const incompatible = Boolean(link && !compatible && !isSource);
+                      return (
+                        <div
+                          key={port.id}
+                          className={`node-port node-port-in ${
+                            compatible ? 'is-compatible' : incompatible ? 'is-incompatible' : ''
+                          } ${isSource ? 'is-source' : ''}`}
+                          style={{ top: PORT_START + i * PORT_STEP }}
+                          data-port-in="true"
+                          data-node-id={node.id}
+                          data-port-id={port.id}
+                          data-port-type={port.type}
+                          title={`${port.label} (${port.type}) — drop a connection here`}
+                          onPointerUp={() => finishLink(node.id, port.id, port.type, 'in')}
+                        >
+                          <button
+                            type="button"
+                            className={`port-dot port-${port.type}`}
+                            aria-label={`Start connection from ${port.label}`}
+                            title={`Drag from ${port.label} (${port.type}) to an output`}
+                            onPointerDown={(e) => {
+                              if (linkRef.current) return;
+                              startLink(node, port.id, port.type, e, 'in');
+                            }}
+                          />
+                          <span>{port.label}</span>
+                          {port.multiple ? <em>multi</em> : null}
+                        </div>
+                      );
+                  })}
+                  {def.outputs.map((port, i) => {
+                    const isSource =
+                      link?.fromNode === node.id &&
+                      link.fromPort === port.id &&
+                      link.fromSide === 'out';
+                    const compatible = Boolean(link && link.fromSide === 'in' && link.type === port.type);
+                    const incompatible = Boolean(link && !compatible && !isSource);
+                    return (
+                      <div
+                        key={port.id}
+                        className={`node-port node-port-out ${
+                          compatible ? 'is-compatible' : incompatible ? 'is-incompatible' : ''
+                        } ${isSource ? 'is-source' : ''}`}
+                        style={{ top: PORT_START + i * PORT_STEP }}
+                        data-port-out-row="true"
+                        data-node-id={node.id}
+                        data-port-id={port.id}
+                        data-port-type={port.type}
+                        title={`${port.label} (${port.type}) — drop a connection here`}
+                        onPointerUp={() => finishLink(node.id, port.id, port.type, 'out')}
+                      >
+                        <span>{port.label}</span>
+                        <button
+                          type="button"
+                          className={`port-dot port-${port.type}`}
+                          title={`Drag from ${port.label} (${port.type}) to an input port`}
+                          onPointerDown={(e) => {
+                            if (linkRef.current) return;
+                            startLink(node, port.id, port.type, e, 'out');
+                          }}
+                        />
+                      </div>
+                    );
+                  })}
                 </div>
 
                 <div className="node-footer">

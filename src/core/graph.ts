@@ -204,6 +204,24 @@ export const NODE_DEFS: Record<GraphNodeType, NodeDefinition> = {
     inputs: [{ id: 'media', label: 'Media', type: 'media', multiple: true }],
     outputs: [{ id: 'media', label: 'Media', type: 'media' }],
   },
+  router: {
+    type: 'router',
+    title: 'Router',
+    category: 'process',
+    description:
+      'A pure pass-through/reroute point for media, masks and palettes. Insert one to keep branches intact when replacing or deleting a node.',
+    accent: '#90e0ef',
+    inputs: [
+      { id: 'media', label: 'Media', type: 'media', multiple: true, optional: true },
+      { id: 'mask', label: 'Mask', type: 'mask', multiple: true, optional: true },
+      { id: 'palette', label: 'Palette', type: 'palette', multiple: true, optional: true },
+    ],
+    outputs: [
+      { id: 'media', label: 'Media', type: 'media' },
+      { id: 'mask', label: 'Mask', type: 'mask' },
+      { id: 'palette', label: 'Palette', type: 'palette' },
+    ],
+  },
   output: {
     type: 'output',
     title: 'Output',
@@ -335,6 +353,8 @@ export function nodeParams(type: GraphNodeType, settings?: PixelArtifySettings):
     case 'postprocess':
       return { postprocess: deepClone(s.postprocess) };
     case 'merge':
+      return {};
+    case 'router':
       return {};
     case 'output':
       return { output: deepClone(s.output), video: deepClone(s.video), label: 'Output' };
@@ -831,6 +851,22 @@ function evaluateNode(
       const items = list.flatMap((v) => (v.type === 'media' ? v.items : []));
       return { media: { type: 'media', items } };
     }
+    case 'router': {
+      const out: Record<string, GraphValue> = {};
+      const mediaItems = (inputs.get('media') ?? []).flatMap((v) =>
+        v.type === 'media' ? v.items : [],
+      );
+      if (mediaItems.length > 0) out.media = { type: 'media', items: mediaItems };
+      const maskItems = (inputs.get('mask') ?? []).flatMap((v) =>
+        v.type === 'mask' ? v.items : [],
+      );
+      if (maskItems.length > 0) out.mask = { type: 'mask', items: maskItems };
+      const palette = (inputs.get('palette') ?? []).find(
+        (v): v is Extract<GraphValue, { type: 'palette' }> => v.type === 'palette',
+      );
+      if (palette) out.palette = palette;
+      return out;
+    }
     case 'output': {
       return media ? { media: { type: 'media', items: media.items } } : null;
     }
@@ -1057,12 +1093,104 @@ export function stopStageForNode(type: GraphNodeType): 'source' | 'preprocess' |
     case 'extract':
     case 'compose':
     case 'merge':
+    case 'router':
       return 'pixelate';
     case 'postprocess':
     case 'output':
     default:
       return 'post';
   }
+}
+
+export interface DeletePreserveResult {
+  graph: PipelineGraph;
+  bridged: number;
+  routerAdded: boolean;
+}
+
+/**
+ * Delete a node without breaking the tree. Incoming and outgoing connections
+ * are bridged by socket type. If a type has several upstream sources (for
+ * example a Merge or Compose node), a Router is inserted and every source is
+ * forwarded through it, preserving branches.
+ */
+export function deleteNodePreservingGraph(
+  graph: PipelineGraph,
+  nodeId: string,
+): DeletePreserveResult {
+  const node = graph.nodes.find((n) => n.id === nodeId);
+  if (!node) return { graph, bridged: 0, routerAdded: false };
+
+  const incoming = graph.edges.filter((e) => e.toNode === nodeId);
+  const outgoing = graph.edges.filter((e) => e.fromNode === nodeId);
+  const nodes = graph.nodes.filter((n) => n.id !== nodeId);
+  const edges = graph.edges.filter((e) => e.fromNode !== nodeId && e.toNode !== nodeId);
+
+  if (incoming.length === 0 || outgoing.length === 0) {
+    return { graph: { ...graph, nodes, edges }, bridged: 0, routerAdded: false };
+  }
+
+  const byId = new Map(graph.nodes.map((n) => [n.id, n]));
+  const typeOf = (edge: GraphEdge, sourceNode: GraphNode | undefined): string | undefined => {
+    if (!sourceNode) return undefined;
+    return NODE_DEFS[sourceNode.type].outputs.find((p) => p.id === edge.fromPort)?.type;
+  };
+
+  const incomingByType = new Map<string, GraphEdge[]>();
+  for (const edge of incoming) {
+    const type = typeOf(edge, byId.get(edge.fromNode));
+    if (!type) continue;
+    const list = incomingByType.get(type) ?? [];
+    list.push(edge);
+    incomingByType.set(type, list);
+  }
+
+  const outgoingByType = new Map<string, GraphEdge[]>();
+  for (const edge of outgoing) {
+    const type = typeOf(edge, node);
+    if (!type) continue;
+    const list = outgoingByType.get(type) ?? [];
+    list.push(edge);
+    outgoingByType.set(type, list);
+  }
+
+  let router: GraphNode | null = null;
+  let bridged = 0;
+  const add = (fromNode: string, fromPort: string, toNode: string, toPort: string): void => {
+    if (edges.some((e) => e.toNode === toNode && e.toPort === toPort && e.fromNode === fromNode && e.fromPort === fromPort)) {
+      return;
+    }
+    edges.push({
+      id: `edge-${Math.random().toString(36).slice(2, 9)}`,
+      fromNode,
+      fromPort,
+      toNode,
+      toPort,
+    });
+    bridged++;
+  };
+
+  for (const [type, ins] of incomingByType) {
+    const outs = outgoingByType.get(type) ?? [];
+    if (outs.length === 0) continue;
+    if (ins.length === 1) {
+      // A single upstream can fan out directly, preserving all branches.
+      for (const out of outs) add(ins[0].fromNode, ins[0].fromPort, out.toNode, out.toPort);
+    } else {
+      if (!router) {
+        router = createNode('router', node.x + 24, node.y + 24);
+      }
+      for (const input of ins) add(input.fromNode, input.fromPort, router.id, type);
+      for (const out of outs) add(router.id, type, out.toNode, out.toPort);
+    }
+  }
+
+  const nextNodes = router ? [...nodes, router] : nodes;
+  return {
+    graph: { ...graph, nodes: nextNodes, edges },
+    bridged,
+    routerAdded: Boolean(router),
+  };
 }
 
 export function outputNodes(graph: PipelineGraph): GraphNode[] {

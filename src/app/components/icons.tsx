@@ -32,6 +32,7 @@ type IconName =
   | 'zoomOut'
   | 'film'
   | 'sheet'
+  | 'split'
   | 'node'
   | 'link'
   | 'brush'
@@ -157,6 +158,13 @@ const PATHS: Record<IconName, React.ReactNode> = {
     <>
       <rect x="3" y="3" width="18" height="18" rx="2" />
       <path d="M9 3v18M15 3v18M3 9h18M3 15h18" />
+    </>
+  ),
+  split: (
+    <>
+      <rect x="3" y="3" width="18" height="8" rx="1.5" />
+      <rect x="3" y="13" width="18" height="8" rx="1.5" />
+      <path d="M3 12h18" />
     </>
   ),
   node: (

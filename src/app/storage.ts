@@ -94,10 +94,14 @@ export function saveActivePaletteId(id: string | null): void {
   saveJSON('activePalette', id);
 }
 
-export function loadUiMode(): 'studio' | 'graph' {
-  return loadJSON<'studio' | 'graph'>('mode', 'studio');
+export type UiMode = 'studio' | 'split' | 'graph';
+
+export function loadUiMode(): UiMode {
+  const mode = loadJSON<UiMode>('mode', 'split');
+  return mode === 'graph' || mode === 'studio' || mode === 'split' ? mode : 'split';
 }
 
-export function saveUiMode(mode: 'studio' | 'graph'): void {
+export function saveUiMode(mode: UiMode): void {
   saveJSON('mode', mode);
 }
+

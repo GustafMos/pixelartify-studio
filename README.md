@@ -19,6 +19,7 @@ PixelArtify Studio turns drawings, photos and videos into deliberate pixel art. 
 ## Highlights
 
 - **Visual node graph** — multiple media inputs (folders or multi-selections), branching chains, merged batches and multiple output nodes.
+- **Split workspace** — a Blender-style viewer + node graph layout with a draggable divider, plus full Studio and Graph tabs.
 - **Edge-aware sampling** — the sampler searches for cell windows that avoid cutting through edges, then blends an area average with the dominant local colour. Inspired by [pixel-mosaic](https://github.com/yogthos/pixel-mosaic).
 - **Resolution independence by construction** — all radii, dither matrices and effect sizes are measured in art pixels. The engine supersamples to a canonical working resolution derived from the art size, never from the source.
 - **Palette Studio** — extraction (median cut + OKLab k-means), Adobe Color–style harmony wheel, shades/tints, WCAG contrast checks and colour-blindness simulation. Import/export GPL, JASC-PAL, Paint.NET/Lospec `.hex`, plain hex and JSON.
@@ -35,9 +36,13 @@ PixelArtify Studio turns drawings, photos and videos into deliberate pixel art. 
 
 ## Screenshots
 
-| Node graph | Palette Studio |
+| Split workspace | Palette Studio |
 | --- | --- |
-| ![Node graph](docs/graph.jpg) | ![Palette Studio](docs/palette.jpg) |
+| ![Split workspace](docs/split.jpg) | ![Palette Studio](docs/palette.jpg) |
+
+| Full node graph |
+| --- |
+| ![Node graph](docs/graph.jpg) |
 
 ---
 
@@ -54,7 +59,7 @@ Open <http://localhost:5173>. Everything runs locally. Drop images or videos ont
 
 ```bash
 npm run build      # typecheck + production build
-npm run test       # 25 core tests
+npm run test       # 28 core tests
 npm run cli -- --help
 npm run build:cli  # bundle the headless CLI
 ```
@@ -81,9 +86,14 @@ The studio targets modern Chromium/Firefox/Safari. Video decoding/encoding uses 
 | **Compose layers** | Layer stack with visibility, opacity, blend, offsets, scaling, detail high-pass, masks, occlusion masks and inpainting settings. |
 | **Post-process** | Outline, bloom, grain, scanlines, vignette, chromatic aberration, CRT, sharpen. |
 | **Merge** | Concatenate multiple media bundles into one batch. |
+| **Router** | Pure pass-through reroute for media, masks and palettes. Keeps branches intact when replacing or deleting a node. |
 | **Output** | PNG/WebP, layer ZIP, batch ZIP, video, spritesheet or both. Multiple outputs render independent variants. |
 
-Double-click a wire to cut it. Drag from an output port to an input port to connect. Mouse wheel zooms; drag the background to pan. `G` switches between Studio and Node graph.
+**Connecting:** drag from an output dot to anywhere on an input port row, or click an output then click an input. The **Connections** panel in the inspector is a keyboard-friendly fallback for adding and removing connections. Drag from an input to an output too — both directions work.
+
+**Disconnecting:** hover a wire and click the red × cut button, use the Connections panel, or double-click the wire. Deleting a node automatically bridges its upstream and downstream connections; if the node has several upstream branches, a **Router** node is inserted so the tree stays intact.
+
+The **Split** tab shows the viewer and the node graph at the same time with a draggable divider. Mouse wheel zooms the graph; drag the background to pan. `G` cycles Studio → Split → Node graph.
 
 ### Resolution independence
 

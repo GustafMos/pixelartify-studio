@@ -68,6 +68,9 @@ export function TopBar(): React.ReactElement {
         <button type="button" className={mode === 'studio' ? 'is-active' : ''} onClick={() => setMode('studio')}>
           <Icon name="image" size={15} /> Studio
         </button>
+        <button type="button" className={mode === 'split' ? 'is-active' : ''} onClick={() => setMode('split')}>
+          <Icon name="split" size={15} /> Split
+        </button>
         <button type="button" className={mode === 'graph' ? 'is-active' : ''} onClick={() => setMode('graph')}>
           <Icon name="graph" size={15} /> Node graph
         </button>

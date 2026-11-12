@@ -24,7 +24,13 @@ import {
   threeLayerStack,
   upscaleNearest,
 } from '../src/core';
-import { createDefaultGraph, createNode, evaluateGraph, mediaAtPort } from '../src/core/graph';
+import {
+  createDefaultGraph,
+  createNode,
+  deleteNodePreservingGraph,
+  evaluateGraph,
+  mediaAtPort,
+} from '../src/core/graph';
 import type { GraphAsset, GraphNode, PipelineGraph } from '../src/core';
 
 function gradient(w: number, h: number, alpha = 255): ReturnType<typeof createImage> {
@@ -351,6 +357,65 @@ describe('nodes and graph', () => {
     );
     const evaluation = evaluateGraph(graph, { assetsByNode: {} });
     expect(evaluation.errors.some((e) => /cycle/i.test(e.message))).toBe(true);
+  });
+
+  it('bridges a deleted node automatically', () => {
+    const graph: PipelineGraph = { id: 'g', name: 'g', description: '', nodes: [], edges: [] };
+    const a = createNode('preprocess', 0, 0);
+    const b = createNode('preprocess', 100, 0);
+    const c = createNode('output', 200, 0);
+    graph.nodes.push(a, b, c);
+    graph.edges.push(
+      { id: 'e1', fromNode: a.id, fromPort: 'media', toNode: b.id, toPort: 'media' },
+      { id: 'e2', fromNode: b.id, fromPort: 'media', toNode: c.id, toPort: 'media' },
+    );
+    const result = deleteNodePreservingGraph(graph, b.id);
+    expect(result.routerAdded).toBe(false);
+    expect(result.graph.edges).toHaveLength(1);
+    expect(result.graph.edges[0]).toMatchObject({ fromNode: a.id, toNode: c.id });
+  });
+
+  it('inserts a router when several branches feed the deleted node', () => {
+    const graph: PipelineGraph = { id: 'g', name: 'g', description: '', nodes: [], edges: [] };
+    const a = createNode('input', 0, 0);
+    const b = createNode('input', 0, 100);
+    const merge = createNode('merge', 100, 50);
+    const out = createNode('output', 200, 50);
+    graph.nodes.push(a, b, merge, out);
+    graph.edges.push(
+      { id: 'e1', fromNode: a.id, fromPort: 'media', toNode: merge.id, toPort: 'media' },
+      { id: 'e2', fromNode: b.id, fromPort: 'media', toNode: merge.id, toPort: 'media' },
+      { id: 'e3', fromNode: merge.id, fromPort: 'media', toNode: out.id, toPort: 'media' },
+    );
+    const result = deleteNodePreservingGraph(graph, merge.id);
+    expect(result.routerAdded).toBe(true);
+    const router = result.graph.nodes.find((n) => n.type === 'router');
+    expect(router).toBeTruthy();
+    expect(result.graph.edges).toHaveLength(3);
+    expect(
+      result.graph.edges.filter((e) => e.toNode === router!.id && e.toPort === 'media'),
+    ).toHaveLength(2);
+    expect(
+      result.graph.edges.some((e) => e.fromNode === router!.id && e.toNode === out.id),
+    ).toBe(true);
+  });
+
+  it('passes media and masks through a router', () => {
+    const graph: PipelineGraph = { id: 'g', name: 'g', description: '', nodes: [], edges: [] };
+    const a = createNode('input', 0, 0);
+    const b = createNode('input', 0, 100);
+    const router = createNode('router', 100, 50);
+    const out = createNode('output', 200, 50);
+    graph.nodes.push(a, b, router, out);
+    graph.edges.push(
+      { id: 'e1', fromNode: a.id, fromPort: 'media', toNode: router.id, toPort: 'media' },
+      { id: 'e2', fromNode: b.id, fromPort: 'media', toNode: router.id, toPort: 'media' },
+      { id: 'e3', fromNode: router.id, fromPort: 'media', toNode: out.id, toPort: 'media' },
+    );
+    const evaluation = evaluateGraph(graph, {
+      assetsByNode: { [a.id]: [asset], [b.id]: [{ ...asset, id: 'b' }] },
+    });
+    expect(mediaAtPort(evaluation, out.id)).toHaveLength(2);
   });
 
   it('crops and resizes while retaining alpha', () => {
