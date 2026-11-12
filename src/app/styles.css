@@ -2055,6 +2055,11 @@ input[type="range"]::-moz-range-thumb {
   border-color: rgba(245, 166, 35, 0.45);
 }
 
+.graph-node.is-detaching {
+  border-style: dashed;
+  opacity: 0.92;
+}
+
 .hint-warning {
   display: inline-grid;
   place-items: center;

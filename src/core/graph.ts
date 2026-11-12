@@ -44,8 +44,10 @@ import {
 import { DEFAULT_RESOLUTION, computeArtSize } from './resolution';
 import { extractMask } from './extraction';
 import {
+  cloneImage,
   cropImage,
   cropMaskNormalized,
+  multiplyAlpha,
   resizeImage,
   resizeMask,
   type ResizeFilter,
@@ -367,6 +369,7 @@ export function nodeParams(type: GraphNodeType, settings?: PixelArtifySettings):
       return {
         extraction: { ...deepClone(s.extraction), enabled: true },
         maskId: 'subject',
+        onlyExtracted: false,
       };
     case 'compose':
       return { layers: deepClone(s.layers.length > 0 ? s.layers : threeLayerStack()) };
@@ -809,6 +812,7 @@ function evaluateNode(
         ...(node.params.extraction as Partial<ExtractionSettings> | undefined),
       };
       const maskId = String(node.params.maskId ?? 'subject');
+      const onlyExtracted = Boolean(node.params.onlyExtracted);
       if (!extraction.enabled) {
         return { media, mask: { type: 'mask', items: [] } };
       }
@@ -833,8 +837,14 @@ function evaluateNode(
           maskId,
           mask,
         });
+        let source = item.source;
+        if (onlyExtracted) {
+          source = cloneImage(source);
+          multiplyAlpha(source, mask);
+        }
         return {
           ...item,
+          source,
           masks: { ...item.masks, [maskId]: mask },
           extraction: deepClone(extraction),
         };

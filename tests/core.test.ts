@@ -391,6 +391,63 @@ describe('nodes and graph', () => {
     expect(item.source.height).toBe(asset.height * 2);
   });
 
+  it('isolates the extracted subject when onlyExtracted is enabled', () => {
+    const input = createNode('input', 0, 0);
+    const extract = createNode('extract', 200, 0);
+    const out = createNode('output', 400, 0);
+    const img = createImage(40, 30);
+    for (let y = 0; y < 30; y++) {
+      for (let x = 0; x < 40; x++) {
+        const i = (y * 40 + x) * 4;
+        const inside = x > 12 && x < 28 && y > 8 && y < 22;
+        img.data[i] = inside ? 240 : 0;
+        img.data[i + 1] = inside ? 230 : 255;
+        img.data[i + 2] = inside ? 210 : 0;
+        img.data[i + 3] = 255;
+      }
+    }
+    const localAsset: GraphAsset = { id: 'iso', name: 'iso.png', kind: 'image', image: img, width: 40, height: 30 };
+    const makeGraph = (onlyExtracted: boolean): PipelineGraph => {
+      extract.params = {
+        extraction: {
+          ...DEFAULT_EXTRACTION,
+          enabled: true,
+          method: 'chroma',
+          keyColor: '#00ff00',
+          tolerance: 0.25,
+        },
+        maskId: 'subject',
+        onlyExtracted,
+      };
+      return {
+        id: 'g',
+        name: 'g',
+        description: '',
+        nodes: [input, extract, out],
+        edges: [
+          { id: 'e1', fromNode: input.id, fromPort: 'media', toNode: extract.id, toPort: 'media' },
+          { id: 'e2', fromNode: extract.id, fromPort: 'media', toNode: out.id, toPort: 'media' },
+        ],
+      };
+    };
+    const countAlpha = (graph: PipelineGraph): { clear: number; solid: number } => {
+      const evaluation = evaluateGraph(graph, { assetsByNode: { [input.id]: [localAsset] } });
+      const item = mediaAtPort(evaluation, out.id)[0];
+      let clear = 0;
+      let solid = 0;
+      for (let i = 3; i < item.source.data.length; i += 4) {
+        if (item.source.data[i] === 0) clear++;
+        else if (item.source.data[i] === 255) solid++;
+      }
+      return { clear, solid };
+    };
+    expect(countAlpha(makeGraph(false))).toEqual({ clear: 0, solid: 40 * 30 });
+    const isolated = countAlpha(makeGraph(true));
+    expect(isolated.clear).toBeGreaterThan(0);
+    expect(isolated.solid).toBeGreaterThan(0);
+    expect(isolated.clear + isolated.solid).toBe(40 * 30);
+  });
+
   it('passes input to output completely unaltered when no processing nodes exist', () => {    const graph: PipelineGraph = { id: 'g', name: 'g', description: '', nodes: [], edges: [] };
     const input = createNode('input', 0, 0);
     const out = createNode('output', 200, 0);

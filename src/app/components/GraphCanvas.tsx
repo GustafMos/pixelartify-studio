@@ -94,7 +94,7 @@ function summaryFor(node: GraphNode, assetCount: number): string {
     }
     case 'extract': {
       const e = p.extraction as { method?: string } | undefined;
-      return `${e?.method ?? 'saliency'} · ${String(p.maskId ?? 'subject')}`;
+      return `${e?.method ?? 'saliency'} · ${String(p.maskId ?? 'subject')}${p.onlyExtracted ? ' · isolated' : ''}`;
     }
     case 'compose': {
       const layers = Array.isArray(p.layers) ? p.layers : [];
@@ -133,6 +133,8 @@ interface DragState {
   dx: number;
   dy: number;
   moved: boolean;
+  /** Shift-drag detaches the node from its wires and reattaches on drop. */
+  detach?: boolean;
 }
 
 interface LinkState {
@@ -200,6 +202,7 @@ export function GraphCanvas(): React.ReactElement {
     preview,
     selectNode,
     moveNode,
+    moveNodeDetached,
     addEdge,
     deleteEdge,
     insertNodeOnEdge,
@@ -248,7 +251,7 @@ export function GraphCanvas(): React.ReactElement {
   }, [graph.nodes, drag]);
 
   const findInsertEdge = useCallback(
-    (nodeId: string, pos: { x: number; y: number }): string | null => {
+    (nodeId: string, pos: { x: number; y: number }, detach = false): string | null => {
       const moving = graph.nodes.find((n) => n.id === nodeId);
       if (!moving) return null;
       const def = NODE_DEFS[moving.type];
@@ -276,7 +279,7 @@ export function GraphCanvas(): React.ReactElement {
         const output = def.outputs.find((p) => p.type === type);
         if (!input || !output) continue;
         const occupied = graph.edges.some((e) => e.toNode === nodeId && e.toPort === input.id);
-        if (occupied && !input.multiple) continue;
+        if (occupied && !input.multiple && !detach) continue;
 
         const geometry = edgeGeometry(edge, graph.nodes, positions);
         if (!geometry) continue;
@@ -307,7 +310,11 @@ export function GraphCanvas(): React.ReactElement {
       return;
     }
     setInsertEdgeId(
-      findInsertEdge(drag.id, { x: drag.origX + drag.dx, y: drag.origY + drag.dy }),
+      findInsertEdge(
+        drag.id,
+        { x: drag.origX + drag.dx, y: drag.origY + drag.dy },
+        drag.detach,
+      ),
     );
   }, [drag, findInsertEdge]);
 
@@ -398,9 +405,13 @@ export function GraphCanvas(): React.ReactElement {
       setDrag((prev) => {
         if (prev && prev.moved) {
           const pos = { x: prev.origX + prev.dx, y: prev.origY + prev.dy };
-          const targetEdge = findInsertEdge(prev.id, pos);
-          if (targetEdge) insertNodeOnEdge(prev.id, targetEdge);
-          moveNode(prev.id, pos.x, pos.y);
+          const targetEdge = findInsertEdge(prev.id, pos, prev.detach);
+          if (prev.detach) {
+            moveNodeDetached(prev.id, pos.x, pos.y, targetEdge);
+          } else {
+            if (targetEdge) insertNodeOnEdge(prev.id, targetEdge);
+            moveNode(prev.id, pos.x, pos.y);
+          }
         }
         return null;
       });
@@ -412,7 +423,7 @@ export function GraphCanvas(): React.ReactElement {
       window.removeEventListener('pointermove', onMove);
       window.removeEventListener('pointerup', onUp);
     };
-  }, [drag, findInsertEdge, insertNodeOnEdge, moveNode, view.zoom]);
+  }, [drag, findInsertEdge, insertNodeOnEdge, moveNode, moveNodeDetached, view.zoom]);
 
   useEffect(() => {
     if (!pan) return;
@@ -658,6 +669,9 @@ export function GraphCanvas(): React.ReactElement {
               const from = graph.nodes.find((n) => n.id === edge.fromNode);
               const to = graph.nodes.find((n) => n.id === edge.toNode);
               if (!from || !to) return null;
+              if (drag?.detach && drag.moved && (edge.fromNode === drag.id || edge.toNode === drag.id)) {
+                return null;
+              }
               const fp = effectivePositions.get(from.id)!;
               const tp = effectivePositions.get(to.id)!;
               const fromDef = NODE_DEFS[from.type];
@@ -678,6 +692,7 @@ export function GraphCanvas(): React.ReactElement {
               return (
                 <g
                   key={edge.id}
+                  data-edge-id={edge.id}
                   className={`graph-edge ${insertEdgeId === edge.id ? 'is-insert-target' : ''}`}
                 >
                   <path
@@ -751,7 +766,7 @@ export function GraphCanvas(): React.ReactElement {
             return (
               <div
                 key={node.id}
-                className={`graph-node ${selected ? 'is-selected' : ''} ${node.bypassed ? 'is-bypassed' : ''} ${cpuWarnings[node.id] ? 'has-cpu-warning' : ''}`}
+                className={`graph-node ${selected ? 'is-selected' : ''} ${node.bypassed ? 'is-bypassed' : ''} ${cpuWarnings[node.id] ? 'has-cpu-warning' : ''} ${drag?.detach && drag.moved && drag.id === node.id ? 'is-detaching' : ''}`}
                 style={{
                   left: pos.x,
                   top: pos.y,
@@ -779,6 +794,7 @@ export function GraphCanvas(): React.ReactElement {
                       dx: 0,
                       dy: 0,
                       moved: false,
+                      detach: e.shiftKey,
                     });
                   }}
                 >
@@ -919,7 +935,7 @@ export function GraphCanvas(): React.ReactElement {
         <div className="graph-hint">
           <Icon name="graph" size={14} />
           Drag nodes · drop a node on a wire to insert it · drag an output to any input row (or click
-          output, then input) · wheel to zoom · hover a wire to cut it · Shift+Space node search ·{' '}
+          output, then input) · wheel to zoom · hover a wire to cut it · Shift-drag detaches · Shift+Space node search ·{' '}
           <span className="hint-warning">!</span> marks CPU-bound nodes
           {mode === 'graph' ? ' · click nodes to preview that stage' : ''}
         </div>

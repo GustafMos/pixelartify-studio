@@ -137,6 +137,7 @@ interface StudioContextValue {
   addEdge: (fromNode: string, fromPort: string, toNode: string, toPort: string) => void;
   deleteEdge: (edgeId: string) => void;
   insertNodeOnEdge: (nodeId: string, edgeId: string) => boolean;
+  moveNodeDetached: (nodeId: string, x: number, y: number, edgeId: string | null) => boolean;
   addAssets: (nodeId: string, files: File[]) => Promise<void>;
   importFiles: (nodeId: string, files: File[]) => Promise<void>;
   removeAsset: (nodeId: string, assetId: string) => void;
@@ -675,8 +676,7 @@ export function StudioProvider({ children }: { children: React.ReactNode }): Rea
   }, [mutateGraph]);
 
   const insertNodeOnEdge = useCallback(
-    (nodeId: string, edgeId: string): boolean => {
-      const edge = graph.edges.find((e) => e.id === edgeId);
+    (nodeId: string, edgeId: string): boolean => {      const edge = graph.edges.find((e) => e.id === edgeId);
       if (!edge) return false;
       if (edge.fromNode === nodeId || edge.toNode === nodeId) return false;
       const source = graph.nodes.find((n) => n.id === edge.fromNode);
@@ -720,6 +720,65 @@ export function StudioProvider({ children }: { children: React.ReactNode }): Rea
       }
       mutateGraph(() => candidate);
       notify(`Inserted “${moving.title}” into the connection.`, 'success');
+      return true;
+    },
+    [graph, mutateGraph, notify],
+  );
+
+  const moveNodeDetached = useCallback(
+    (nodeId: string, x: number, y: number, edgeId: string | null): boolean => {
+      const moving = graph.nodes.find((n) => n.id === nodeId);
+      if (!moving) return false;
+      const def = NODE_DEFS[moving.type];
+      let edges = graph.edges.filter((e) => e.fromNode !== nodeId && e.toNode !== nodeId);
+
+      if (edgeId) {
+        const edge = graph.edges.find(
+          (e) => e.id === edgeId && e.fromNode !== nodeId && e.toNode !== nodeId,
+        );
+        const source = edge ? graph.nodes.find((n) => n.id === edge.fromNode) : null;
+        const target = edge ? graph.nodes.find((n) => n.id === edge.toNode) : null;
+        if (edge && source && target) {
+          const edgeType = NODE_DEFS[source.type].outputs.find((p) => p.id === edge.fromPort)?.type;
+          const input = edgeType ? def.inputs.find((p) => p.type === edgeType) : undefined;
+          const output = edgeType ? def.outputs.find((p) => p.type === edgeType) : undefined;
+          const targetAccepts =
+            edgeType &&
+            NODE_DEFS[target.type].inputs.some(
+              (p) => p.id === edge.toPort && p.type === edgeType,
+            );
+          if (edgeType && input && output && targetAccepts) {
+            edges = [
+              ...edges.filter((e) => e.id !== edge.id),
+              {
+                id: uid('edge'),
+                fromNode: source.id,
+                fromPort: edge.fromPort,
+                toNode: nodeId,
+                toPort: input.id,
+              },
+              {
+                id: uid('edge'),
+                fromNode: nodeId,
+                fromPort: output.id,
+                toNode: target.id,
+                toPort: edge.toPort,
+              },
+            ];
+          }
+        }
+      }
+
+      const candidate: PipelineGraph = {
+        ...graph,
+        nodes: graph.nodes.map((n) => (n.id === nodeId ? { ...n, x, y } : n)),
+        edges,
+      };
+      if (validateGraph(candidate).some((error) => /cycle/i.test(error.message))) {
+        notify('That reattachment would create a cycle.', 'error');
+        return false;
+      }
+      mutateGraph(() => candidate, true);
       return true;
     },
     [graph, mutateGraph, notify],
@@ -1181,6 +1240,7 @@ export function StudioProvider({ children }: { children: React.ReactNode }): Rea
     addEdge,
     deleteEdge,
     insertNodeOnEdge,
+    moveNodeDetached,
     addAssets: addAssetsInternal,
     importFiles,
     removeAsset,

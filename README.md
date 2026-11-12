@@ -61,7 +61,7 @@ Open <http://localhost:5173>. Everything runs locally. Drop images or videos ont
 
 ```bash
 npm run build      # typecheck + production build
-npm run test       # 35 core tests
+npm run test       # 36 core tests
 npm run cli -- --help
 npm run build:cli  # bundle the headless CLI
 ```
@@ -85,7 +85,7 @@ The studio targets modern Chromium/Firefox/Safari. Video decoding/encoding uses 
 | **Pixelate** | Resolution policy + edge-aware sampler. Defines the art size. |
 | **Palette** | Auto-extracted or custom palette; outputs media and palette sockets. |
 | **Dither** | Algorithm, strength, pattern scale, colour space, serpentine scan, threshold and seed. |
-| **Feature extract** | Saliency, subject box/ellipse, chroma, luma, edge or manual mask. Outputs a mask bundle. |
+| **Feature extract** | Saliency, subject box/ellipse, chroma, luma, edge or manual mask. Outputs a mask bundle. Enable **Only extracted** to multiply the media output by the mask, leaving everything else transparent. |
 | **Compose layers** | Layer stack with visibility, opacity, blend, offsets, scaling, detail high-pass, masks, occlusion masks and inpainting settings. |
 | **Post-process** | Outline, bloom, grain, scanlines, vignette, chromatic aberration, CRT, sharpen. |
 | **Merge** | Concatenate multiple media bundles into one batch. |
@@ -95,6 +95,8 @@ The studio targets modern Chromium/Firefox/Safari. Video decoding/encoding uses 
 **Connecting:** drag from an output dot to anywhere on an input port row, or click an output then click an input. The **Connections** panel in the inspector is a keyboard-friendly fallback for adding and removing connections. Drag from an input to an output too — both directions work.
 
 **Adding after the selected node:** when a node is selected, adding a new one places it to the right and splices it into that node's outgoing connection. The same applies to **Shift+Space**, which opens a searchable command palette with recently used node types at the top. Use ↑/↓ and Enter to add; Esc closes.
+
+**Detaching:** hold **Shift** while dragging a node to detach it from all of its wires. While dragging, its old connections disappear. Drop it onto another wire to splice it back in, or drop it on empty canvas to leave it detached.
 
 **Inserting:** drag a node by its title bar and drop it on a wire. The wire highlights green while the drop target is valid; releasing splices the node between the two existing nodes. Nodes with an incompatible port type, an occupied single input or a would-be cycle are left untouched.
 
@@ -188,6 +190,7 @@ Every algorithm honours `strength`, `scale` (art pixels), `threshold` bias and s
    - **Subject box/ellipse** — predictable cutout region for characters.
    - **Chroma / luma / edge** — keying, tonal masks, detail masks.
    - **Manual** — paint directly on the preview with add/erase, softness, invert and feather.
+   - **Only extracted** — applies the mask to the Extract node's media output, so the subject stays and the rest becomes transparent. The mask output is still available for Compose.
 2. Add a **Compose layers** node and connect one or more mask bundles.
 3. Layer roles:
    - **Background** — full image, optionally inpaints regions hidden by higher layers.
@@ -304,7 +307,7 @@ The core is DOM-free. The browser UI, the CLI and future workers all call the sa
 npm run test
 ```
 
-Covered: resolution independence, resampling/alpha correctness, palette formats and extraction, dither palette exactness and determinism, render pipeline, layer inpainting, crop/resize/channel/color graph nodes, cycle detection, preset round-trip, multi-sheet splitting, A4 registration-mark layout and upscaling.
+Covered: resolution independence, resampling/alpha correctness, palette formats and extraction, dither palette exactness and determinism, render pipeline, layer inpainting, crop/resize/channel/color graph nodes, resize times and nearest default, extract isolation, cycle detection, preset round-trip, multi-sheet splitting, A4 registration-mark layout and upscaling.
 
 ---
 

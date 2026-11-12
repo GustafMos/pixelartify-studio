@@ -83,6 +83,15 @@ export function ExtractPanel({ node }: { node: GraphNode }): React.ReactElement 
           checked={extraction.enabled}
           onChange={(v) => set({ enabled: v })}
         />
+        <Toggle
+          label="Only extracted (rest transparent)"
+          checked={Boolean(node.params.onlyExtracted)}
+          onChange={(v) => updateNodeParams(node.id, { onlyExtracted: v })}
+        />
+        <p className="micro-copy">
+          Applies the extracted mask to the media output itself. Leave off to pass the full image through while
+          still exporting the mask for Compose layers.
+        </p>
         <div className="mask-preview-card">
           {maskUrl ? (
             <img src={maskUrl} alt="Extracted mask" />
