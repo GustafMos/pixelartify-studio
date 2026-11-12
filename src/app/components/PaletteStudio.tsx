@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import type { HarmonyRule, PaletteDefinition, PaletteSettings } from '../../core/types';
 import {
+  DEFAULT_PALETTE,
   bestTextColor,
   contrastGrade,
   contrastRatio,
@@ -57,6 +58,7 @@ export function PaletteStudio(): React.ReactElement {
     videoFrame,
     updateNodeParams,
     savePalette,
+    selectNode,
     notify,
     activePalette,
     setActivePalette,
@@ -80,20 +82,33 @@ export function PaletteStudio(): React.ReactElement {
   const [saveName, setSaveName] = useState('My Palette');
   const wheelRef = useRef<HTMLCanvasElement>(null);
   const importRef = useRef<HTMLInputElement>(null);
+  const savedIdRef = useRef<string | null>(null);
 
+  // Initialise only when the studio opens or the target node changes. Saving a
+  // new palette changes the active palette id; it must not reset the editor to
+  // the node's previous colours (which made Apply look like a no-op).
   useEffect(() => {
     if (!paletteStudioOpen) return;
     const initial =
       paletteSettings && paletteSettings.colors.length > 0
         ? paletteSettings.colors
         : activePalette?.colors ?? colors;
+    // If the node has its own palette, Save creates a new library entry. If we
+    // are editing a loaded custom palette, Save updates it in place.
+    savedIdRef.current =
+      !(paletteSettings && paletteSettings.colors.length > 0) &&
+      activePalette &&
+      activePalette.source !== 'builtin'
+        ? activePalette.id
+        : null;
     if (initial.length > 0) {
       setColors([...initial]);
       const vivid = [...initial].sort((a, b) => hexToHsl(b).s - hexToHsl(a).s)[0];
       setBase(vivid ?? initial[0]);
-      setSaveName(activePalette?.name ? `${activePalette.name} edit` : 'My Palette');
+      setSaveName(activePalette?.name ?? 'My Palette');
     }
-  }, [paletteStudioOpen, paletteNode?.id, activePalette?.id]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [paletteStudioOpen, paletteNode?.id]);
 
   const harmony = useMemo(
     () =>
@@ -193,22 +208,38 @@ export function PaletteStudio(): React.ReactElement {
       notify('Add a Palette node to the graph first.', 'warn');
       return;
     }
-    const settings = {
-      ...(paletteNode.params.palette as PaletteSettings),
+    if (colors.length === 0) {
+      notify('Add or extract at least one colour first.', 'warn');
+      return;
+    }
+    const settings: PaletteSettings = {
+      ...DEFAULT_PALETTE,
+      ...(paletteNode.params.palette as PaletteSettings | undefined),
       mode: 'custom',
-      colors,
+      colors: [...colors],
     };
     updateNodeParams(paletteNode.id, { palette: settings });
-    notify(`Applied ${colors.length} colours to the Palette node.`, 'success');
+    selectNode(paletteNode.id);
+    notify(
+      `Applied ${colors.length} colours to “${paletteNode.title}”.`,
+      'success',
+    );
   };
 
   const save = (): void => {
+    if (colors.length === 0) {
+      notify('Add or extract at least one colour before saving.', 'warn');
+      return;
+    }
+    const name = saveName.trim() || 'Palette';
     const p: PaletteDefinition = {
-      id: `palette-${Date.now().toString(36)}`,
-      name: saveName.trim() || 'Palette',
-      colors,
+      id: savedIdRef.current ?? `palette-${Date.now().toString(36)}`,
+      name,
+      colors: [...colors],
       source: 'custom',
     };
+    savedIdRef.current = p.id;
+    setSaveName(name);
     savePalette(p);
   };
 
@@ -376,9 +407,11 @@ export function PaletteStudio(): React.ReactElement {
               onChange={(e) => {
                 const p = palettes.find((x) => x.id === e.target.value);
                 if (p) {
+                  savedIdRef.current = p.source === 'builtin' ? null : p.id;
                   setActivePalette(p.id);
                   setColors(p.colors);
                   setBase(p.colors[0]);
+                  setSaveName(p.name);
                 }
               }}
               aria-label="Load palette"

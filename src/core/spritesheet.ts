@@ -5,6 +5,10 @@
 import type { PixelImage } from './types';
 import { createImage } from './image';
 
+/** Hard limits used before allocating a sheet, to avoid canvas errors/OOM. */
+export const SHEET_MAX_SIDE = 16384;
+export const SHEET_MAX_PIXELS = 64_000_000;
+
 export interface SpritesheetOptions {
   columns: number;
   padding: number;
@@ -42,23 +46,38 @@ export function packSpritesheet(
   if (frames.length === 0) throw new Error('No frames to pack.');
   const cellW = Math.max(...frames.map((f) => f.width));
   const cellH = Math.max(...frames.map((f) => f.height));
-  const padding = Math.max(0, Math.round(options.padding));
-  const maxSize = Math.max(64, Math.round(options.maxSize));
+  if (!Number.isFinite(cellW) || !Number.isFinite(cellH) || cellW < 1 || cellH < 1) {
+    throw new Error('Spritesheet frames have an invalid size.');
+  }
+  // Sanitize every numeric option: old graphs and hand-edited presets may omit
+  // fields, and NaN padding would otherwise produce NaN sheet dimensions.
+  const opts = (options ?? {}) as Partial<SpritesheetOptions>;
+  const rawPadding = Number(opts.padding);
+  const padding = Math.max(0, Math.min(256, Math.round(Number.isFinite(rawPadding) ? rawPadding : 0)));
+  const rawMax = Number(opts.maxSize);
+  const maxSize = Math.max(
+    64,
+    Math.min(SHEET_MAX_SIDE, Math.round(Number.isFinite(rawMax) ? rawMax : 4096)),
+  );
   const count = frames.length;
+  const requestedColumns = Number(opts.columns);
 
-  let columns = options.columns > 0 ? Math.max(1, Math.round(options.columns)) : Math.ceil(Math.sqrt(count));
+  let columns =
+    Number.isFinite(requestedColumns) && requestedColumns > 0
+      ? Math.max(1, Math.round(requestedColumns))
+      : Math.ceil(Math.sqrt(count));
   columns = Math.min(columns, count);
 
   const widthFor = (cols: number): number => cols * cellW + (cols - 1) * padding;
   const rowsFor = (cols: number): number => Math.ceil(count / cols);
   const heightFor = (cols: number): number => rowsFor(cols) * cellH + (rowsFor(cols) - 1) * padding;
 
-  if (options.columns > 0) {
+  if (Number.isFinite(requestedColumns) && requestedColumns > 0) {
     // Respect an explicit column count.
     columns = Math.min(count, columns);
   } else {
     // Pick the column count closest to square that fits within maxSize.
-    let best = columns;
+    let best = -1;
     let bestScore = Infinity;
     for (let cols = 1; cols <= count; cols++) {
       const w = widthFor(cols);
@@ -71,13 +90,41 @@ export function packSpritesheet(
         best = cols;
       }
     }
-    if (bestScore !== Infinity) columns = best;
+    if (best > 0) {
+      columns = best;
+    } else {
+      // maxSize cannot be honoured. Use the layout with the smallest longest
+      // side that still fits a canvas, rather than producing a giant sheet.
+      let fallback = -1;
+      let fallbackSide = Infinity;
+      for (let cols = 1; cols <= count; cols++) {
+        const w = widthFor(cols);
+        const h = heightFor(cols);
+        if (w > SHEET_MAX_SIDE || h > SHEET_MAX_SIDE) continue;
+        if (w * h > SHEET_MAX_PIXELS) continue;
+        const side = Math.max(w, h);
+        const score = side + Math.abs(cols - columns) * 0.02;
+        if (score < fallbackSide) {
+          fallbackSide = score;
+          fallback = cols;
+        }
+      }
+      if (fallback < 0) {
+        const needed = count * cellW * cellH;
+        throw new Error(
+          `Spritesheet too large: ${count} frames at ${cellW}×${cellH} need at least ${(
+            needed / 1_000_000
+          ).toFixed(1)} Mpx. Reduce the Art size or export scale, lower the frame count, raise Max size, or export Video only.`,
+        );
+      }
+      columns = fallback;
+    }
   }
   const rows = rowsFor(columns);
   let sheetW = widthFor(columns);
   let sheetH = heightFor(columns);
 
-  if (options.powerOfTwo) {
+  if (opts.powerOfTwo) {
     const pot = (v: number): number => {
       let p = 1;
       while (p < v) p <<= 1;
@@ -87,9 +134,19 @@ export function packSpritesheet(
     sheetH = pot(sheetH);
   }
 
+  if (
+    sheetW > SHEET_MAX_SIDE ||
+    sheetH > SHEET_MAX_SIDE ||
+    sheetW * sheetH > SHEET_MAX_PIXELS
+  ) {
+    throw new Error(
+      `Spritesheet would be ${sheetW}×${sheetH}. Reduce the Art size or export scale, turn off power-of-two, or export Video only.`,
+    );
+  }
+
   const image = createImage(sheetW, sheetH);
-  const offsetX = options.powerOfTwo ? Math.floor((sheetW - widthFor(columns)) / 2) : 0;
-  const offsetY = options.powerOfTwo ? Math.floor((sheetH - heightFor(columns)) / 2) : 0;
+  const offsetX = opts.powerOfTwo ? Math.floor((sheetW - widthFor(columns)) / 2) : 0;
+  const offsetY = opts.powerOfTwo ? Math.floor((sheetH - heightFor(columns)) / 2) : 0;
   const meta: SpritesheetFrameMeta[] = [];
 
   for (let i = 0; i < count; i++) {

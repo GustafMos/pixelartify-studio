@@ -23,11 +23,15 @@ export function computeArtSize(
   sourceHeight: number,
   resolution: ResolutionSettings,
 ): ArtSize {
-  const sw = Math.max(1, sourceWidth);
-  const sh = Math.max(1, sourceHeight);
+  const sw = Math.max(1, Number.isFinite(sourceWidth) ? sourceWidth : 1);
+  const sh = Math.max(1, Number.isFinite(sourceHeight) ? sourceHeight : 1);
 
   if (resolution.mode === 'native') {
-    const pixelScale = clamp(Math.round(resolution.exportScale || 1), 1, 16);
+    const pixelScale = clamp(
+      Math.round(Number.isFinite(resolution.exportScale) ? resolution.exportScale : 1) || 1,
+      1,
+      16,
+    );
     return {
       width: sw,
       height: sh,
@@ -40,7 +44,8 @@ export function computeArtSize(
   let artW = sw;
   let artH = sh;
 
-  const value = Math.max(1, resolution.value);
+  const rawValue = Number(resolution.value);
+  const value = Math.max(1, Number.isFinite(rawValue) ? rawValue : 270);
   switch (resolution.mode) {
     case 'fixed-height': {
       artH = value;
@@ -69,8 +74,10 @@ export function computeArtSize(
   }
 
   // Respect the configured bounds while preserving aspect ratio.
-  const minSide = Math.max(2, resolution.minSide);
-  const maxSide = Math.max(minSide, resolution.maxSide);
+  const rawMinSide = Number(resolution.minSide);
+  const rawMaxSide = Number(resolution.maxSide);
+  const minSide = Math.max(2, Number.isFinite(rawMinSide) ? rawMinSide : 16);
+  const maxSide = Math.max(minSide, Number.isFinite(rawMaxSide) ? rawMaxSide : 2048);
   const short = Math.min(artW, artH);
   if (short < minSide) {
     const k = minSide / Math.max(1, short);
@@ -84,15 +91,20 @@ export function computeArtSize(
     artH = Math.round(artH * k);
   }
 
-  artW = clamp(artW, 2, 4096);
-  artH = clamp(artH, 2, 4096);
+  artW = Number.isFinite(artW) ? clamp(artW, 2, 4096) : 2;
+  artH = Number.isFinite(artH) ? clamp(artH, 2, 4096) : 2;
 
   if (resolution.snapEven) {
     artW = Math.max(2, Math.round(artW / 2) * 2);
     artH = Math.max(2, Math.round(artH / 2) * 2);
   }
 
-  const exportScale = clamp(Math.round(resolution.exportScale || 1), 1, 16);
+  const rawScale = Number(resolution.exportScale);
+  const exportScale = clamp(
+    Math.round(Number.isFinite(rawScale) ? rawScale : 1) || 1,
+    1,
+    16,
+  );
   return {
     width: artW,
     height: artH,
@@ -111,7 +123,10 @@ export function computeWorkingSize(
   artHeight: number,
   maxLong = 2048,
 ): { width: number; height: number; supersample: number } {
-  const long = Math.max(artWidth, artHeight);
+  const aw = Math.max(2, Number.isFinite(artWidth) ? artWidth : 2);
+  const ah = Math.max(2, Number.isFinite(artHeight) ? artHeight : 2);
+  const limit = Math.max(64, Number.isFinite(maxLong) ? maxLong : 2048);
+  const long = Math.max(aw, ah);
   // Supersampling only needs to resolve the sampling window; beyond ~2× the
   // art size it adds cost without visible detail. Small art keeps a higher
   // factor because the absolute pixel count stays cheap.
@@ -119,18 +134,18 @@ export function computeWorkingSize(
   if (long <= 192) factor = 5;
   else if (long <= 384) factor = 4;
 
-  let workW = artWidth * factor;
-  let workH = artHeight * factor;
+  let workW = aw * factor;
+  let workH = ah * factor;
   const workLong = Math.max(workW, workH);
-  if (workLong > maxLong) {
-    const k = maxLong / workLong;
+  if (workLong > limit) {
+    const k = limit / workLong;
     workW = Math.round(workW * k);
     workH = Math.round(workH * k);
-    factor = workW / Math.max(1, artWidth);
+    factor = workW / Math.max(1, aw);
   }
   return {
-    width: Math.max(2, workW),
-    height: Math.max(2, workH),
+    width: Math.max(2, Math.round(workW)),
+    height: Math.max(2, Math.round(workH)),
     supersample: factor,
   };
 }

@@ -16,6 +16,7 @@ import {
   defaultSettings,
   extractPalette,
   generateHarmony,
+  packSpritesheet,
   parsePalette,
   parsePreset,
   renderPixelArt,
@@ -524,6 +525,34 @@ describe('presets', () => {
       expect(preset.graph.nodes.some((n: GraphNode) => n.type === 'output')).toBe(true);
       expect(settingsFromGraph(preset.graph).pixelate.edgeAware).toBe(true);
     }
+  });
+});
+
+describe('spritesheet safety', () => {
+  it('sanitizes missing numeric options instead of producing NaN dimensions', () => {
+    const frame = createImage(4, 3);
+    const sheet = packSpritesheet(
+      [frame, frame],
+      {
+        columns: undefined as unknown as number,
+        padding: undefined as unknown as number,
+        maxSize: undefined as unknown as number,
+        powerOfTwo: false,
+      },
+      [0.04, 0.04],
+    );
+    expect(Number.isFinite(sheet.sheetWidth)).toBe(true);
+    expect(Number.isFinite(sheet.sheetHeight)).toBe(true);
+    expect(sheet.sheetWidth).toBeGreaterThanOrEqual(4);
+    expect(sheet.sheetHeight).toBeGreaterThanOrEqual(3);
+    expect(sheet.frames).toHaveLength(2);
+  });
+
+  it('rejects sheets that would exceed canvas limits with a clear error', () => {
+    const huge = { width: 9000, height: 9000, data: new Uint8ClampedArray(0) } as ReturnType<typeof createImage>;
+    expect(() =>
+      packSpritesheet([huge, huge, huge, huge], { columns: 0, padding: 0, maxSize: 4096, powerOfTwo: false }),
+    ).toThrow(/too large|would be/i);
   });
 });
 

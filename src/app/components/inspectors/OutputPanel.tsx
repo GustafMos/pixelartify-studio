@@ -4,6 +4,9 @@ import type { GraphMediaItem } from '../../../core/graph';
 import {
   DEFAULT_OUTPUT,
   DEFAULT_VIDEO,
+  SHEET_MAX_PIXELS,
+  SHEET_MAX_SIDE,
+  computeArtSize,
   defaultSettings,
   packSpritesheet,
   renderPixelArt,
@@ -48,8 +51,16 @@ export function OutputPanel({ node }: { node: GraphNode }): React.ReactElement {
     notify,
     presets,
   } = useStudio();
-  const output = (node.params.output as OutputSettings | undefined) ?? { ...DEFAULT_OUTPUT };
-  const video = (node.params.video as VideoSettings | undefined) ?? { ...DEFAULT_VIDEO };
+  const output: OutputSettings = {
+    ...DEFAULT_OUTPUT,
+    ...((node.params.output as Partial<OutputSettings> | undefined) ?? {}),
+  };
+  const rawVideo = (node.params.video as Partial<VideoSettings> | undefined) ?? {};
+  const video: VideoSettings = {
+    ...DEFAULT_VIDEO,
+    ...rawVideo,
+    spritesheet: { ...DEFAULT_VIDEO.spritesheet, ...(rawVideo.spritesheet ?? {}) },
+  };
   const [busy, setBusy] = useState(false);
   const [progress, setProgress] = useState<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
@@ -132,11 +143,16 @@ export function OutputPanel({ node }: { node: GraphNode }): React.ReactElement {
       return null;
     }
     const fps = video.fps;
-    const built = await runSpritesheet(sourceItems, activeAsset?.name ?? 'pixelart', fps, false);
-    downloadBlob(built.png, built.name);
-    downloadText(built.json, built.metaName);
-    notify(`Spritesheet exported (${built.sheet.frames.length} frames, ${built.sheet.sheetWidth}×${built.sheet.sheetHeight}).`, 'success');
-    return built;
+    try {
+      const built = await runSpritesheet(sourceItems, activeAsset?.name ?? 'pixelart', fps, false);
+      downloadBlob(built.png, built.name);
+      downloadText(built.json, built.metaName);
+      notify(`Spritesheet exported (${built.sheet.frames.length} frames, ${built.sheet.sheetWidth}×${built.sheet.sheetHeight}).`, 'success');
+      return built;
+    } catch (err) {
+      notify(`Spritesheet export failed: ${err instanceof Error ? err.message : err}`, 'error');
+      return null;
+    }
   };
 
   const exportVideo = async (): Promise<void> => {
@@ -150,13 +166,44 @@ export function OutputPanel({ node }: { node: GraphNode }): React.ReactElement {
       return;
     }
     const settings = { ...settingsFromItem(item), output, video };
+    const wantsVideo = settings.video.output === 'video' || settings.video.output === 'both';
+    let wantsSheet = settings.video.output === 'spritesheet' || settings.video.output === 'both';
+
+    // Pre-flight the output size before decoding every frame. Long videos at a
+    // high export scale can exceed canvas or codec limits; fail clearly (or
+    // skip just the sheet) instead of after minutes of work.
+    if (wantsVideo || wantsSheet) {
+      const est = computeArtSize(activeAsset.width, activeAsset.height, item.resolution);
+      const count = Math.max(1, frameEstimate || outputItems.length || 1);
+      const cellW = Math.max(1, est.exportWidth);
+      const cellH = Math.max(1, est.exportHeight);
+      const MAX_VIDEO_SIDE = 8192;
+      if (wantsVideo && (cellW > MAX_VIDEO_SIDE || cellH > MAX_VIDEO_SIDE)) {
+        notify(
+          `Video output would be ${cellW}×${cellH}. Reduce the Art size or export scale to keep both sides at ${MAX_VIDEO_SIDE}px or less.`,
+          'error',
+        );
+        return;
+      }
+      if (wantsSheet) {
+        const area = cellW * cellH * count;
+        if (cellW > SHEET_MAX_SIDE || cellH > SHEET_MAX_SIDE || area > SHEET_MAX_PIXELS) {
+          const message = `Spritesheet skipped: ${count} frames at ${cellW}×${cellH} need ${(area / 1_000_000).toFixed(1)} Mpx. Reduce the Art size or export scale, or choose Video only.`;
+          if (!wantsVideo) {
+            notify(message, 'error');
+            return;
+          }
+          wantsSheet = false;
+          notify(message, 'warn');
+        }
+      }
+    }
+
     const controller = new AbortController();
     abortRef.current = controller;
     setBusy(true);
     setProgress('Starting video encoder…');
     try {
-      const wantsVideo = settings.video.output === 'video' || settings.video.output === 'both';
-      const wantsSheet = settings.video.output === 'spritesheet' || settings.video.output === 'both';
       const frames: ReturnType<typeof renderPixelArt>['art'][] = [];
       const writerState: { writer: VideoWriter | null } = { writer: null };
       let resultInfo: Awaited<ReturnType<VideoWriter['finish']>> | null = null;
@@ -205,44 +252,59 @@ export function OutputPanel({ node }: { node: GraphNode }): React.ReactElement {
       void index;
 
       const base = activeAsset.name.replace(/\.[^.]+$/, '') || 'pixelart';
+      type SheetOutput = { png: Blob; json: string; metaText: string; sheet: ReturnType<typeof packSpritesheet> } | null;
+      let sheetOut: SheetOutput = null;
+      let sheetError: unknown = null;
+
       if (wantsSheet) {
-        setProgress('Packing spritesheet…');
-        const sheet = packSpritesheet(frames, settings.video.spritesheet, frames.map(() => 1 / settings.video.fps));
-        const png = await pixelImageToBlob(sheet.image, 'png', 1);
-        const json = JSON.stringify(spritesheetMetadata(sheet, `${base}-sheet`, settings.video.fps), null, 2);
-        if (wantsVideo && resultInfo) {
-          const file = formatFilename(settings.output.filenamePattern, {
-            name: base,
-            width: resultInfo.width,
-            height: resultInfo.height,
-            ext: resultInfo.extension,
-          });
-          await downloadZip(
-            [
-              { name: file, data: resultInfo.blob },
-              { name: `${base}-sheet.png`, data: png },
-              { name: `${base}-sheet.json`, data: json },
-            ],
-            `${base}-pixelart.zip`,
-          );
-          notify(`Video + spritesheet exported (${frames.length} frames, ${resultInfo.extension.toUpperCase()}).`, 'success');
-        } else {
-          downloadBlob(png, `${base}-sheet.png`);
-          downloadText(json, `${base}-sheet.json`);
-          notify(`Spritesheet exported (${frames.length} frames, ${sheet.sheetWidth}×${sheet.sheetHeight}).`, 'success');
+        try {
+          setProgress('Packing spritesheet…');
+          const sheet = packSpritesheet(frames, settings.video.spritesheet, frames.map(() => 1 / settings.video.fps));
+          const png = await pixelImageToBlob(sheet.image, 'png', 1);
+          const json = JSON.stringify(spritesheetMetadata(sheet, `${base}-sheet`, settings.video.fps), null, 2);
+          sheetOut = { png, json, metaText: json, sheet };
+        } catch (err) {
+          sheetError = err;
         }
-      } else if (resultInfo) {
+      }
+
+      if (wantsVideo && resultInfo) {
         const file = formatFilename(settings.output.filenamePattern, {
           name: base,
           width: resultInfo.width,
           height: resultInfo.height,
           ext: resultInfo.extension,
         });
-        downloadBlob(resultInfo.blob, file);
-        notify(
-          `Video exported: ${resultInfo.width}×${resultInfo.height}, ${resultInfo.extension.toUpperCase()} (${resultInfo.codec}).`,
-          'success',
-        );
+        if (sheetOut && sheetOut.sheet) {
+          await downloadZip(
+            [
+              { name: file, data: resultInfo.blob },
+              { name: `${base}-sheet.png`, data: sheetOut.png },
+              { name: `${base}-sheet.json`, data: sheetOut.json },
+            ],
+            `${base}-pixelart.zip`,
+          );
+          notify(`Video + spritesheet exported (${sheetOut.sheet.frames.length} frames, ${resultInfo.extension.toUpperCase()}).`, 'success');
+        } else {
+          downloadBlob(resultInfo.blob, file);
+          if (sheetError) {
+            notify(
+              `Video exported, but the spritesheet failed: ${sheetError instanceof Error ? sheetError.message : sheetError}`,
+              'warn',
+            );
+          } else {
+            notify(
+              `Video exported: ${resultInfo.width}×${resultInfo.height}, ${resultInfo.extension.toUpperCase()} (${resultInfo.codec}).`,
+              'success',
+            );
+          }
+        }
+      } else if (sheetOut) {
+        downloadBlob(sheetOut.png, `${base}-sheet.png`);
+        downloadText(sheetOut.json, `${base}-sheet.json`);
+        notify(`Spritesheet exported (${sheetOut.sheet.frames.length} frames, ${sheetOut.sheet.sheetWidth}×${sheetOut.sheet.sheetHeight}).`, 'success');
+      } else if (sheetError) {
+        notify(`Spritesheet failed: ${sheetError instanceof Error ? sheetError.message : sheetError}`, 'error');
       }
     } catch (err) {
       if (err instanceof DOMException && err.name === 'AbortError') {
