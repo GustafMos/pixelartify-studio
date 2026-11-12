@@ -13,6 +13,8 @@ tmp/
 test-output/
 test-output-*/
 test-video/
+test-video-*/
+test-output-final/
 dist-cli/
 *.log
 .vscode/*
