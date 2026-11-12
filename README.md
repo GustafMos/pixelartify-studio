@@ -18,7 +18,7 @@ PixelArtify Studio turns drawings, photos and videos into deliberate pixel art. 
 
 ## Highlights
 
-- **Visual node graph** — multiple media inputs (folders or multi-selections), branching chains, merged batches and multiple output nodes. Drag a node over an existing wire to splice it into that connection automatically.
+- **Visual node graph** — multiple media inputs (folders or multi-selections), branching chains, merged batches and multiple output nodes. Drag a node over an existing wire to splice it into that connection automatically. Nodes whose current settings use a CPU-only bottleneck show an amber **!** with the reason in the inspector.
 - **GPU-accelerated sampler and dithering** — a WebGL2 backend runs the edge alignment search, offset smoothing, dominant-colour sampling, palette matching and matrix dithering in parallel, with automatic CPU fallback. Error-diffusion dithering is sequential and stays on the CPU. Expect roughly 2× faster previews on large images and smoother video playback.
 - **Color Correct node** — exposure, contrast, brightness, saturation, gamma, hue, temperature and tint, with look presets. Alpha is preserved and several Color Correct nodes can be chained for an ordered grade.
 - **Split workspace** — a Blender-style viewer + node graph layout with a draggable divider, plus full Studio and Graph tabs.
@@ -99,6 +99,8 @@ The studio targets modern Chromium/Firefox/Safari. Video decoding/encoding uses 
 **Disconnecting:** hover a wire and click the red × cut button, use the Connections panel, or double-click the wire. Deleting a node automatically bridges its upstream and downstream connections; if the node has several upstream branches, a **Router** node is inserted so the tree stays intact.
 
 The **Split** tab shows the viewer and the node graph at the same time with a draggable divider. Mouse wheel zooms the graph; drag the background to pan. `G` cycles Studio → Split → Node graph.
+
+An amber **!** next to a node means its current settings contain CPU-only work that is likely to dominate preview or playback time. Hover the mark (or select the node) for the reason and a suggested faster alternative. Typical examples: error-diffusion dithering, automatic palette extraction, painterly/oil/watercolour effects, layer compositing/inpainting, Lanczos/Bicubic resize, and CPU fallback when WebGL2 is unavailable.
 
 **Only nodes that are actually in the branch affect the image.** A graph with just a Media input wired to an Output is a lossless pass-through. Add Pixelate, Palette, Dither or effect nodes when you want them; the default look is never applied implicitly.
 

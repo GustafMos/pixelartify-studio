@@ -2,6 +2,7 @@ import React from 'react';
 import { NODE_DEFS } from '../../core/graph';
 import type { GraphNode } from '../../core/types';
 import { useStudio } from '../store';
+import { nodeCpuWarning } from '../bottlenecks';
 import { Badge, EmptyState, IconButton } from './controls';
 import { Icon } from './icons';
 import { InputPanel } from './inspectors/InputPanel';
@@ -43,6 +44,7 @@ export function Inspector(): React.ReactElement {
   }
 
   const def = NODE_DEFS[selectedNode.type];
+  const cpuWarning = nodeCpuWarning(selectedNode, graph);
 
   return (
     <aside className="inspector">
@@ -80,6 +82,15 @@ export function Inspector(): React.ReactElement {
           <span className="inspector-desc">{def.description}</span>
         </div>
       </div>
+
+      {cpuWarning ? (
+        <div className="cpu-warning" title={cpuWarning.detail}>
+          <span className="node-warning">!</span>
+          <span>
+            <strong>{cpuWarning.title}.</strong> {cpuWarning.detail}
+          </span>
+        </div>
+      ) : null}
 
       <div className="inspector-status">
         <span className="status-dot" />

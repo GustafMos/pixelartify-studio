@@ -4,6 +4,7 @@ import type { GraphEdge, GraphNode, GraphNodeType } from '../../core/types';
 import { DITHER_BY_ID } from '../../core/dither';
 import { pixelImageToDataUrl } from '../io';
 import { useStudio } from '../store';
+import { nodeCpuWarning } from '../bottlenecks';
 import { Icon, type IconName } from './icons';
 import { IconButton } from './controls';
 
@@ -221,8 +222,16 @@ export function GraphCanvas(): React.ReactElement {
     setLink(next);
   }, []);
 
-  const effectivePositions = useMemo(() => {
-    const map = new Map<string, { x: number; y: number }>();
+  const cpuWarnings = useMemo(() => {
+    const map: Record<string, NonNullable<ReturnType<typeof nodeCpuWarning>>> = {};
+    for (const node of graph.nodes) {
+      const warning = nodeCpuWarning(node, graph);
+      if (warning) map[node.id] = warning;
+    }
+    return map;
+  }, [graph]);
+
+  const effectivePositions = useMemo(() => {    const map = new Map<string, { x: number; y: number }>();
     for (const node of graph.nodes) {
       if (drag && drag.id === node.id) {
         map.set(node.id, { x: drag.origX + drag.dx, y: drag.origY + drag.dy });
@@ -747,7 +756,7 @@ export function GraphCanvas(): React.ReactElement {
             return (
               <div
                 key={node.id}
-                className={`graph-node ${selected ? 'is-selected' : ''} ${node.bypassed ? 'is-bypassed' : ''}`}
+                className={`graph-node ${selected ? 'is-selected' : ''} ${node.bypassed ? 'is-bypassed' : ''} ${cpuWarnings[node.id] ? 'has-cpu-warning' : ''}`}
                 style={{
                   left: pos.x,
                   top: pos.y,
@@ -782,6 +791,15 @@ export function GraphCanvas(): React.ReactElement {
                     <Icon name={TYPE_ICON[node.type]} size={15} />
                   </span>
                   <span className="node-title">{node.title}</span>
+                  {cpuWarnings[node.id] ? (
+                    <span
+                      className="node-warning"
+                      title={`${cpuWarnings[node.id]!.title}: ${cpuWarnings[node.id]!.detail}`}
+                      aria-label={cpuWarnings[node.id]!.title}
+                    >
+                      !
+                    </span>
+                  ) : null}
                   <span className="node-actions">
                     <button
                       type="button"
@@ -906,7 +924,8 @@ export function GraphCanvas(): React.ReactElement {
         <div className="graph-hint">
           <Icon name="graph" size={14} />
           Drag nodes · drop a node on a wire to insert it · drag an output to any input row (or click
-          output, then input) · wheel to zoom · hover a wire to cut it
+          output, then input) · wheel to zoom · hover a wire to cut it ·{' '}
+          <span className="hint-warning">!</span> marks CPU-bound nodes
           {mode === 'graph' ? ' · click nodes to preview that stage' : ''}
         </div>
       </div>
