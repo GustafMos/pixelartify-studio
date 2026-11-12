@@ -31,6 +31,7 @@ export interface SpritesheetResult {
   cellHeight: number;
   sheetWidth: number;
   sheetHeight: number;
+  padding: number;
 }
 
 export function packSpritesheet(
@@ -118,6 +119,7 @@ export function packSpritesheet(
     cellHeight: cellH,
     sheetWidth: sheetW,
     sheetHeight: sheetH,
+    padding,
   };
 }
 
@@ -176,7 +178,7 @@ export function spritesheetMetadata(
       rows: sheet.rows,
       cellWidth: sheet.cellWidth,
       cellHeight: sheet.cellHeight,
-      padding: sheet.frames.length > 1 ? sheet.frames[1].x - sheet.frames[0].x - sheet.frames[0].w : 0,
+      padding: sheet.padding,
     },
   };
 }

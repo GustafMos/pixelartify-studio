@@ -2046,11 +2046,11 @@ input[type="range"]::-moz-range-thumb {
 }
 
 .node-port-in .port-dot {
-  left: -5px;
+  left: 2px;
 }
 
 .node-port-out .port-dot {
-  right: -5px;
+  right: 2px;
 }
 
 .port-media { background: var(--accent); }
