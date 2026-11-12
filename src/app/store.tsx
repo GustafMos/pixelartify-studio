@@ -541,19 +541,20 @@ export function StudioProvider({ children }: { children: React.ReactNode }): Rea
       notify(`Cannot connect ${out.type} to ${inp.type}.`, 'error');
       return;
     }
-    mutateGraph((g) => {
-      const filtered = inp.multiple
-        ? g.edges
-        : g.edges.filter((e) => !(e.toNode === toNode && e.toPort === toPort));
-      return {
-        ...g,
-        edges: [
-          ...filtered,
-          { id: uid('edge'), fromNode, fromPort, toNode, toPort },
-        ],
-      };
-    });
-  }, [graph.nodes, mutateGraph, notify]);
+    const filtered = inp.multiple
+      ? graph.edges
+      : graph.edges.filter((e) => !(e.toNode === toNode && e.toPort === toPort));
+    const edges = [
+      ...filtered,
+      { id: uid('edge'), fromNode, fromPort, toNode, toPort },
+    ];
+    const candidate: PipelineGraph = { ...graph, edges };
+    if (validateGraph(candidate).some((error) => /cycle/i.test(error.message))) {
+      notify('That connection would create a cycle.', 'error');
+      return;
+    }
+    mutateGraph(() => candidate);
+  }, [graph, mutateGraph, notify]);
 
   const deleteEdge = useCallback((edgeId: string) => {
     mutateGraph((g) => ({ ...g, edges: g.edges.filter((e) => e.id !== edgeId) }));
