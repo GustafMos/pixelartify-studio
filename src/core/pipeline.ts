@@ -55,6 +55,19 @@ export function setGlobalPixelator(pixelator: Pixelator | null): void {
   globalPixelator = pixelator;
 }
 
+/** Optional accelerated layer compositor (WebGL2). Returns null on fallback. */
+export type LayerCompositor = (
+  width: number,
+  height: number,
+  layers: CompositeLayer[],
+) => PixelImage | null;
+
+let globalLayerCompositor: LayerCompositor | null = null;
+
+export function setGlobalLayerCompositor(compositor: LayerCompositor | null): void {
+  globalLayerCompositor = compositor;
+}
+
 function runPixelator(
   src: PixelImage,
   options: PixelateSourceOptions,
@@ -413,7 +426,9 @@ function compositeWithRenderer(
   height: number,
   layers: CompositeLayer[],
 ): PixelImage {
-  // compositeLayers already implements correct alpha compositing.
+  const accelerated = globalLayerCompositor?.(width, height, layers);
+  if (accelerated) return accelerated;
+  // compositeLayers implements the same alpha/blend semantics on the CPU.
   return compositeLayers(width, height, layers);
 }
 

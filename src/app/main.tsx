@@ -2,13 +2,14 @@ import React from 'react';
 import { createRoot } from 'react-dom/client';
 import { StudioProvider } from './store';
 import { App } from './App';
-import { setGlobalPixelator, setGlobalDitherFinisher } from '../core/pipeline';
+import { setGlobalPixelator, setGlobalDitherFinisher, setGlobalLayerCompositor } from '../core/pipeline';
 import { setGlobalResizer } from '../core/image';
 import { setGlobalEffectAccelerator } from '../core/preprocess';
 import { gpuPixelate } from './gpuPixelate';
 import { gpuDither } from './gpuFinish';
 import { gpuResize } from './gpuResize';
 import { applyGpuEffects } from './gpuEffects';
+import { gpuCompositeLayers } from './gpuLayers';
 import './styles.css';
 
 // Use the WebGL2 backends when available; all fall back to the CPU path
@@ -17,6 +18,7 @@ setGlobalPixelator(gpuPixelate);
 setGlobalDitherFinisher(gpuDither);
 setGlobalResizer(gpuResize);
 setGlobalEffectAccelerator(applyGpuEffects);
+setGlobalLayerCompositor(gpuCompositeLayers);
 
 class ErrorBoundary extends React.Component<
   { children: React.ReactNode },

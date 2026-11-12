@@ -10,6 +10,7 @@ import { playbackPaletteKey, playbackSettings } from '../playback';
 import { GPU_MIN_PIXELS, gpuAvailable } from '../gpuPixelate';
 import { GPU_MIN_DITHER_PIXELS, gpuDitherAvailable, supportsGpuDither } from '../gpuFinish';
 import { GPU_MIN_EFFECT_PIXELS, gpuEffectsAvailable, supportsGpuEffects } from '../gpuEffects';
+import { GPU_MIN_LAYER_PIXELS, gpuLayersAvailable } from '../gpuLayers';
 import { Icon } from './icons';
 import { Badge, IconButton, Segmented, Slider, Spinner } from './controls';
 
@@ -99,6 +100,13 @@ export function Viewer({ resizeKey }: { resizeKey?: number | string } = {}): Rea
         ...activeItem.latePreprocessOps,
       ]) ||
         supportsGpuEffects('postprocess', activeItem.postprocess.ops)),
+  );
+  const layersSampler = useMemo(() => gpuLayersAvailable(), []);
+  const layersActive = Boolean(
+    layersSampler &&
+      activeItem &&
+      artW * artH >= GPU_MIN_LAYER_PIXELS &&
+      activeItem.layers.some((layer) => layer.visible && (!layer.maskId || activeItem.masks[layer.maskId])),
   );
 
   const paintArt = useCallback((image: PixelImage) => {
@@ -756,6 +764,7 @@ export function Viewer({ resizeKey }: { resizeKey?: number | string } = {}): Rea
           </Badge>
           {ditherActive ? <Badge tone="success">GPU dither</Badge> : null}
           {effectsActive ? <Badge tone="success">GPU effects</Badge> : null}
+          {layersActive ? <Badge tone="success">GPU layers</Badge> : null}
           {videoPlaying ? <Badge tone="warn">Playback preview</Badge> : null}
         </div>
         <div className="viewer-toolbar-right">

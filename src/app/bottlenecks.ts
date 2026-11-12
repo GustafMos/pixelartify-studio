@@ -4,6 +4,7 @@ import { gpuAvailable } from './gpuPixelate';
 import { gpuDitherAvailable, supportsGpuDither } from './gpuFinish';
 import { gpuResizeAvailable } from './gpuResize';
 import { gpuEffectsAvailable, supportsGpuEffects } from './gpuEffects';
+import { gpuLayersAvailable } from './gpuLayers';
 
 export interface CpuWarning {
   /** Short label used in badges. */
@@ -137,16 +138,46 @@ export function nodeCpuWarning(node: GraphNode, graph: PipelineGraph): CpuWarnin
 
     case 'compose': {
       const layers = Array.isArray(node.params.layers)
-        ? (node.params.layers as Array<{ visible?: boolean; inpaintOcclusion?: boolean }>)
+        ? (node.params.layers as Array<{
+            visible?: boolean;
+            inpaintOcclusion?: boolean;
+            role?: string;
+            detailStrength?: number;
+          }>)
         : [];
       const visible = layers.filter((layer) => layer.visible !== false);
       if (visible.length === 0) return null;
-      const inpainting = visible.some((layer) => layer.inpaintOcclusion);
+      // The final alpha/blend/offset/scale composite runs on the GPU. Only the
+      // stages before it are CPU-bound: inpainting fills occluded regions with
+      // a diffusion pass, and detail layers build a Gaussian high-pass copy.
+      const hasMasks = graph.nodes.some((n) => n.type === 'extract');
+      const inpainting =
+        hasMasks && visible.some((layer) => layer.inpaintOcclusion);
+      const detail = visible.some((layer) => layer.role === 'detail');
+      if (!gpuLayersAvailable()) {
+        return {
+          title: 'CPU layers',
+          detail:
+            'WebGL2 is unavailable, so layer blending runs on the CPU. Occlusion inpainting and detail high-pass also run on the CPU.',
+        };
+      }
+      if (!inpainting && !detail) return null;
+      const parts: string[] = [];
+      if (inpainting) parts.push('inpainting');
+      if (detail) parts.push('detail high-pass');
+      const detailText = [
+        inpainting
+          ? 'Occlusion inpainting fills the masked regions with a diffusion pass on the CPU.'
+          : '',
+        detail
+          ? 'Detail layers build a Gaussian high-pass copy on the CPU before they are pixelated.'
+          : '',
+      ]
+        .filter(Boolean)
+        .join(' ');
       return {
-        title: inpainting ? 'CPU inpainting' : 'CPU layers',
-        detail: inpainting
-          ? 'Layer compositing and background inpainting run on the CPU. Inpainting is especially expensive during playback.'
-          : 'Layer compositing runs on the CPU. More visible layers and larger working resolutions increase the cost.',
+        title: `CPU ${parts.join(' + ')}`,
+        detail: `${detailText} The final layer blend is GPU-accelerated when WebGL2 is available.`,
       };
     }
 

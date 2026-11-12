@@ -19,7 +19,7 @@ PixelArtify Studio turns drawings, photos and videos into deliberate pixel art. 
 ## Highlights
 
 - **Visual node graph** — multiple media inputs (folders or multi-selections), branching chains, merged batches and multiple output nodes. Drag a node over an existing wire to splice it into that connection automatically. Nodes whose current settings use a CPU-only bottleneck show an amber **!** with the reason in the inspector.
-- **GPU-accelerated pipeline** — WebGL2 handles Sobel/chroma edge detection, non-maximum suppression, edge-aware sampling, nearest/bilinear resize, palette matching, matrix dithering, and single-pass grade/post effects (color correct, posterize, grain, scanlines, vignette, chromatic aberration, outline), with automatic CPU fallback. Error-diffusion dithering and blur/painterly effects remain on the CPU because they are sequential or multi-pass.
+- **GPU-accelerated pipeline** — WebGL2 handles Sobel/chroma edge detection, non-maximum suppression, edge-aware sampling, nearest/bilinear resize, palette matching, matrix dithering, single-pass grade/post effects (color correct, posterize, grain, scanlines, vignette, chromatic aberration, outline), and the final layer blend (offset/scale/opacity and all five blend modes), with automatic CPU fallback. Error-diffusion dithering, blur/painterly effects, occlusion inpainting and detail high-pass layers remain on the CPU because they are sequential or multi-pass.
 - **Color Correct node** — exposure, contrast, brightness, saturation, gamma, hue, temperature and tint, with look presets. Alpha is preserved and several Color Correct nodes can be chained for an ordered grade.
 - **Split workspace** — a Blender-style viewer + node graph layout with a draggable divider, plus full Studio and Graph tabs.
 - **Edge-aware sampling** — the sampler searches for cell windows that avoid cutting through edges, then blends an area average with the dominant local colour. Inspired by [pixel-mosaic](https://github.com/yogthos/pixel-mosaic).
@@ -122,10 +122,11 @@ The heaviest parts of the pipeline run on the GPU through WebGL2 when available:
 - **Resize** — nearest-neighbour and bilinear resampling run as a shader pass. Nearest is the default for pixel art.
 - **Dithering** — palette matching and every matrix-based algorithm (Bayer, blue noise, clustered dot, line, checker, dot, crosshatch, white noise, threshold) are evaluated per pixel in a shader. Error-diffusion algorithms (Floyd–Steinberg, Atkinson, …) are inherently sequential and stay on the CPU.
 - **Effects** — color correct, posterize, grain, scanlines, vignette, chromatic aberration and sprite outline have single-pass shader versions. Blur-based, painterly and inpainting effects remain on the CPU.
+- **Layers** — the final offset/scale/opacity/blend pass runs in a WebGL2 ping-pong compositor. Each layer is still pixelated separately, and occlusion inpainting plus detail high-pass generation remain on the CPU.
 - Playback renders directly to the preview canvas without a PNG encode/decode or a React render per frame. The art pixel budget adapts to the dither: larger for GPU dithers, smaller for CPU error diffusion.
 - Typical end-to-end previews are about **2× faster** on large images (measured 326 → 156 ms at 405×270 art and 1.92 → 0.97 s at 1080×720 on a mid-range GPU).
-- GPU edge maps match the CPU (mean error ~0.03 levels) and roughly halve the sampling stage; GPU dithering/effects match within 1–2 8-bit levels.
-- The viewer shows `GPU sampler`, `GPU dither` and `GPU effects` badges when each backend is active.
+- GPU edge maps match the CPU (mean error ~0.03 levels) and roughly halve the sampling stage; GPU dithering/effects match within 1–2 8-bit levels, and GPU layer blending matches within 0–3 levels.
+- The viewer shows `GPU sampler`, `GPU dither`, `GPU effects` and `GPU layers` badges when each backend is active.
 - `1-bit Ink` uses Atkinson error diffusion, so its playback is CPU-bound (~10 fps on the test machine). `Game Boy DMG` uses Bayer and reaches ~20 fps. Preset cards now show a **! CPU** warning for presets with CPU-heavy stages; switching the 1-bit dither to a Bayer/blue-noise algorithm makes it much faster.
 - If WebGL2 is unavailable, the pipeline falls back to the CPU automatically.
 
