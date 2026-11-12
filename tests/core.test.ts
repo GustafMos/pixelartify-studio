@@ -33,6 +33,7 @@ import {
 import {
   createDefaultGraph,
   createNode,
+  applyItemAlphaCuts,
   deleteNodePreservingGraph,
   evaluateGraph,
   mediaAtPort,
@@ -446,6 +447,19 @@ describe('nodes and graph', () => {
     expect(isolated.clear).toBeGreaterThan(0);
     expect(isolated.solid).toBeGreaterThan(0);
     expect(isolated.clear + isolated.solid).toBe(40 * 30);
+
+    const evaluation = evaluateGraph(makeGraph(true), { assetsByNode: { [input.id]: [localAsset] } });
+    const item = mediaAtPort(evaluation, out.id)[0];
+    expect(item.alphaCutMaskIds).toContain('subject');
+    const frame = createImage(40, 30);
+    for (let i = 0; i < frame.data.length; i += 4) {
+      frame.data[i] = 200;
+      frame.data[i + 3] = 255;
+    }
+    const cut = applyItemAlphaCuts(item, frame);
+    expect(cut.data[3]).toBe(0);
+    const center = (15 * 40 + 20) * 4 + 3;
+    expect(cut.data[center]).toBe(255);
   });
 
   it('passes input to output completely unaltered when no processing nodes exist', () => {    const graph: PipelineGraph = { id: 'g', name: 'g', description: '', nodes: [], edges: [] };

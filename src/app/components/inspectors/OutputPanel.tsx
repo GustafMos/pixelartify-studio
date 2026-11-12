@@ -17,7 +17,7 @@ import {
   spritesheetMetadata,
 } from '../../../core';
 import type { PixelImage } from '../../../core/types';
-import { mediaAtPort } from '../../../core/graph';
+import { applyItemAlphaCuts, mediaAtPort } from '../../../core/graph';
 import { useStudio } from '../../store';
 import {
   formatFilename,
@@ -111,8 +111,9 @@ export function OutputPanel({ node }: { node: GraphNode }): React.ReactElement {
 
   const renderItem = (item: GraphMediaItem, image = item.source) => {
     const settings = { ...settingsFromItem(item), output, video };
+    const input = image === item.source ? image : applyItemAlphaCuts(item, image);
     return {
-      result: renderPixelArt({ image, masks: item.masks, settings }, { upscale: true }),
+      result: renderPixelArt({ image: input, masks: item.masks, settings }, { upscale: true }),
       settings,
     };
   };
@@ -413,7 +414,11 @@ export function OutputPanel({ node }: { node: GraphNode }): React.ReactElement {
           async (frame, i) => {
             setProgress(`Rendering print frame ${i + 1}`);
             const result = renderPixelArt(
-              { image: frame, masks: videoItem?.masks, settings: printSettings },
+              {
+                image: videoItem ? applyItemAlphaCuts(videoItem, frame) : frame,
+                masks: videoItem?.masks,
+                settings: printSettings,
+              },
               { upscale: false },
             );
             frames.push(result.art);

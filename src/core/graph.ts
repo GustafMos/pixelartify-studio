@@ -273,6 +273,8 @@ export interface GraphMediaItem {
   sourceWidth: number;
   sourceHeight: number;
   masks: Record<string, MaskData>;
+  /** Mask IDs applied to the media output by "only extracted" nodes. */
+  alphaCutMaskIds?: string[];
   layers: LayerSettings[];
   preprocessOps: PreprocessOp[];
   latePreprocessOps: PreprocessOp[];
@@ -846,6 +848,9 @@ function evaluateNode(
           ...item,
           source,
           masks: { ...item.masks, [maskId]: mask },
+          alphaCutMaskIds: onlyExtracted
+            ? [...(item.alphaCutMaskIds ?? []), maskId]
+            : item.alphaCutMaskIds,
           extraction: deepClone(extraction),
         };
       });
@@ -965,6 +970,21 @@ export function mediaAtPort(
 ): GraphMediaItem[] {
   const value = valueAtPort(evaluation, nodeId, port);
   return value && value.type === 'media' ? value.items : [];
+}
+
+/**
+ * Apply "only extracted" masks to a live video frame. Image sources already
+ * carry the cut in `item.source`, so only use this with frame overrides.
+ */
+export function applyItemAlphaCuts(item: GraphMediaItem, image: PixelImage): PixelImage {
+  const ids = item.alphaCutMaskIds ?? [];
+  if (ids.length === 0) return image;
+  const out = cloneImage(image);
+  for (const id of ids) {
+    const mask = item.masks[id];
+    if (mask) multiplyAlpha(out, mask);
+  }
+  return out;
 }
 
 interface CropBounds {
@@ -1104,6 +1124,7 @@ function makeItem(node: GraphNode, asset: GraphAsset): GraphMediaItem {
     sourceWidth: asset.width,
     sourceHeight: asset.height,
     masks: {},
+    alphaCutMaskIds: [],
     layers: [],
     preprocessOps: [],
     latePreprocessOps: [],

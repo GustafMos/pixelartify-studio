@@ -110,7 +110,7 @@ An amber **!** next to a node means its current settings contain CPU-only work t
 
 The viewer's **Fit preview** button (active by default) keeps the image fitted with a small padding whenever you resize the split divider, switch tabs or resize the window. Zooming or panning turns auto-fit off; click the fit button to re-enable it.
 
-Video assets get a **play/pause** button next to the timeline. Playback uses a hidden `<video>` element for smooth decoding, renders at a reduced preview resolution, reuses the palette from the first frame to avoid flicker and extraction cost, and loops until paused. Scrubbing while paused shows a full-quality frame.
+Video assets get a **play/pause** button next to the timeline. Playback uses a hidden `<video>` element for smooth decoding, renders with the art short side capped at 320 px, reuses the palette from the first frame and loops until paused. Pausing restores a full-quality frame. This keeps heavy graphs moving instead of appearing frozen after one frame.
 
 ### Performance
 
@@ -191,6 +191,8 @@ Every algorithm honours `strength`, `scale` (art pixels), `threshold` bias and s
    - **Chroma / luma / edge** — keying, tonal masks, detail masks.
    - **Manual** — paint directly on the preview with add/erase, softness, invert and feather.
    - **Only extracted** — applies the mask to the Extract node's media output, so the subject stays and the rest becomes transparent. The mask output is still available for Compose.
+   - **Select subject** — opens a box selection on the preview. Drag around the subject; the box becomes a manual mask override and alpha-only output is enabled. **Paint mask** and **Reset mask override** remain available for adjustment.
+   - On video, only-extracted is applied to every live preview and exported frame. H.264/VP9 still flatten transparency, so use PNG/spritesheet output when alpha matters.
 2. Add a **Compose layers** node and connect one or more mask bundles.
 3. Layer roles:
    - **Background** — full image, optionally inpaints regions hidden by higher layers.

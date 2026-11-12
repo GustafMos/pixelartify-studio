@@ -45,6 +45,7 @@ export function ExtractPanel({ node }: { node: GraphNode }): React.ReactElement 
     updateNodeParams,
     refreshMasks,
     beginMaskEdit,
+    beginSubjectSelect,
     clearMaskOverride,
     maskOverrides,
     videoFrame,
@@ -92,6 +93,15 @@ export function ExtractPanel({ node }: { node: GraphNode }): React.ReactElement 
           Applies the extracted mask to the media output itself. Leave off to pass the full image through while
           still exporting the mask for Compose layers.
         </p>
+        {extraction.method === 'manual' && !override && Boolean(node.params.onlyExtracted) ? (
+          <div className="info-callout">
+            <Icon name="brush" size={16} />
+            <span>
+              Manual extraction has no mask yet, so the isolated output would be empty. Use{' '}
+              <strong>Select subject</strong> or <strong>Paint mask</strong> first.
+            </span>
+          </div>
+        ) : null}
         <div className="mask-preview-card">
           {maskUrl ? (
             <img src={maskUrl} alt="Extracted mask" />
@@ -102,13 +112,27 @@ export function ExtractPanel({ node }: { node: GraphNode }): React.ReactElement 
             </div>
           )}
           <div className="mask-preview-meta">
-            <Badge tone={override ? 'success' : 'neutral'}>{override ? 'painted' : 'auto'}</Badge>
+            <Badge tone={override ? 'success' : 'neutral'}>{override ? 'manual' : 'auto'}</Badge>
             <span>{mask ? `${mask.width}×${mask.height}` : '—'}</span>
           </div>
         </div>
         <div className="btn-row">
           <button type="button" className="ghost-btn small" onClick={refreshMasks}>
             <Icon name="refresh" size={14} /> Re-extract
+          </button>
+          <button
+            type="button"
+            className="ghost-btn small"
+            onClick={() => {
+              updateNodeParams(node.id, {
+                onlyExtracted: true,
+                extraction: { ...extraction, enabled: true },
+              });
+              beginSubjectSelect(node.id, maskId);
+            }}
+            disabled={!activeAsset}
+          >
+            <Icon name="fit" size={14} /> Select subject
           </button>
           <button
             type="button"
@@ -120,7 +144,7 @@ export function ExtractPanel({ node }: { node: GraphNode }): React.ReactElement 
           </button>
           {override ? (
             <button type="button" className="text-btn danger" onClick={() => clearMaskOverride(maskKey)}>
-              Reset painting
+              Reset mask override
             </button>
           ) : null}
         </div>

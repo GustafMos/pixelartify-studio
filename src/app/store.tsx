@@ -41,10 +41,12 @@ import {
   NODE_DEFS,
   createDefaultGraph,
   deleteNodePreservingGraph,
+  applyItemAlphaCuts,
   type GraphAsset,
   type GraphMediaItem,
 } from '../core/graph';
 import { loadGraph, saveGraph, loadUserPresets, saveUserPresets, loadUserPalettes, saveUserPalettes, loadActivePaletteId, saveActivePaletteId, loadUiMode, saveUiMode, loadRecentNodes, saveRecentNodes } from './storage';
+import { computeArtSize } from '../core/resolution';
 import {
   decodeImageFile,
   downloadText,
@@ -116,6 +118,7 @@ interface StudioContextValue {
   videoFrame: PixelImage | null;
   videoFrameLoading: boolean;
   videoPlaying: boolean;
+  subjectSelect: { nodeId: string; maskId: string } | null;
   paletteStudioOpen: boolean;
   toasts: Toast[];
   setMode: (mode: 'studio' | 'split' | 'graph') => void;
@@ -127,6 +130,8 @@ interface StudioContextValue {
   setVideoTime: (time: number) => void;
   setVideoPlaying: (playing: boolean) => void;
   onPlaybackFrame: (image: PixelImage, time: number) => void;
+  beginSubjectSelect: (nodeId: string, maskId: string) => void;
+  endSubjectSelect: () => void;
   setPreviewFullQuality: (full: boolean) => void;
   addNode: (type: GraphNodeType, x?: number, y?: number) => string;
   duplicateNode: (id: string) => string | null;
@@ -206,6 +211,7 @@ export function StudioProvider({ children }: { children: React.ReactNode }): Rea
   const [videoFrame, setVideoFrame] = useState<PixelImage | null>(null);
   const [videoFrameLoading, setVideoFrameLoading] = useState(false);
   const [videoPlaying, setVideoPlayingState] = useState(false);
+  const [subjectSelect, setSubjectSelect] = useState<{ nodeId: string; maskId: string } | null>(null);
   const [paletteStudioOpen, setPaletteStudioOpen] = useState(false);
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [isExporting, setIsExporting] = useState(false);
@@ -350,6 +356,17 @@ export function StudioProvider({ children }: { children: React.ReactNode }): Rea
     const timer = window.setTimeout(() => {
       try {
         const settings = settingsFromItem(activeItem);
+        let renderSettings = settings;
+        if (videoPlaying && settings.pixelate.enabled !== false) {
+          const art = computeArtSize(activeItem.sourceWidth, activeItem.sourceHeight, settings.resolution);
+          const short = Math.min(art.width, art.height);
+          if (short > 320) {
+            renderSettings = {
+              ...settings,
+              resolution: { ...settings.resolution, mode: 'short-side', value: 320 },
+            };
+          }
+        }
         const paletteKey = videoPlaying
           ? [
               activeItem.assetId,
@@ -367,11 +384,11 @@ export function StudioProvider({ children }: { children: React.ReactNode }): Rea
         let source = activeItem.source;
         let masks = activeItem.masks;
         if (activeAsset?.kind === 'video' && videoFrame) {
-          source = videoFrame;
+          source = applyItemAlphaCuts(activeItem, videoFrame);
           masks = { ...masks };
         }
         const result = renderPixelArt(
-          { image: source, masks, settings },
+          { image: source, masks, settings: renderSettings },
           {
             stopAfter: stopStageForNode(previewNode.type),
             upscale: false,
@@ -449,6 +466,10 @@ export function StudioProvider({ children }: { children: React.ReactNode }): Rea
     setVideoPlayingState(false);
   }, [activeAsset?.id]);
 
+  useEffect(() => {
+    setSubjectSelect(null);
+  }, [activeAsset?.id]);
+
   const setMode = useCallback((next: 'studio' | 'split' | 'graph') => {
     setModeState(next);
     if (next === 'studio' && selectedOutputId) setSelectedNodeId(selectedOutputId);
@@ -472,6 +493,13 @@ export function StudioProvider({ children }: { children: React.ReactNode }): Rea
     setVideoFrame(image);
     setVideoTimeState(Math.max(0, time));
   }, []);
+  const beginSubjectSelect = useCallback((nodeId: string, maskId: string) => {
+    setMaskEditState(null);
+    setSubjectSelect({ nodeId, maskId });
+    setSelectedNodeId(nodeId);
+    setModeState((prev) => (prev === 'graph' ? 'split' : prev));
+  }, []);
+  const endSubjectSelect = useCallback(() => setSubjectSelect(null), []);
 
   const addNode = useCallback((type: GraphNodeType, x?: number, y?: number): string => {
     const settings = settingsFromGraph(graph);
@@ -1008,6 +1036,7 @@ export function StudioProvider({ children }: { children: React.ReactNode }): Rea
     setHistoryTick((v) => v + 1);
   }, []);
   const beginMaskEdit = useCallback((nodeId: string, maskId: string) => {
+    setSubjectSelect(null);
     setMaskEditState({ nodeId, maskId, brushSize: 14, feather: 2, action: 'add' });
     setSelectedNodeId(nodeId);
     setModeState('studio');
@@ -1231,6 +1260,7 @@ export function StudioProvider({ children }: { children: React.ReactNode }): Rea
     videoFrame,
     videoFrameLoading,
     videoPlaying,
+    subjectSelect,
     paletteStudioOpen,
     toasts,
     setMode,
@@ -1242,6 +1272,8 @@ export function StudioProvider({ children }: { children: React.ReactNode }): Rea
     setVideoTime,
     setVideoPlaying,
     onPlaybackFrame,
+    beginSubjectSelect,
+    endSubjectSelect,
     setPreviewFullQuality,
     addNode,
     duplicateNode,

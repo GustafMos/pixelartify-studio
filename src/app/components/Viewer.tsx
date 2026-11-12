@@ -23,6 +23,8 @@ export function Viewer({ resizeKey }: { resizeKey?: number | string } = {}): Rea
     setVideoPlaying,
     onPlaybackFrame,
     activeItem,
+    subjectSelect,
+    endSubjectSelect,
     maskEdit,
     endMaskEdit,
     setMaskEdit,
@@ -57,6 +59,8 @@ export function Viewer({ resizeKey }: { resizeKey?: number | string } = {}): Rea
   const [autoFit, setAutoFit] = useState(true);
   const [panning, setPanning] = useState(false);
   const [compareDragging, setCompareDragging] = useState(false);
+  const [subjectRect, setSubjectRect] = useState<{ x0: number; y0: number; x1: number; y1: number } | null>(null);
+  const subjectStartRef = useRef<{ x: number; y: number } | null>(null);
 
   const art = preview?.art ?? null;
   const artW = art?.width ?? 1;
@@ -190,6 +194,77 @@ export function Viewer({ resizeKey }: { resizeKey?: number | string } = {}): Rea
     }
     setVideoPlaying(true);
   }, [videoPlaying, videoTime, setVideoPlaying, setVideoTime]);
+
+  const normalizeSubjectPoint = useCallback((clientX: number, clientY: number) => {
+    const el = wrapperRef.current;
+    if (!el) return null;
+    const rect = el.getBoundingClientRect();
+    return {
+      x: Math.min(1, Math.max(0, (clientX - rect.left) / Math.max(1, rect.width))),
+      y: Math.min(1, Math.max(0, (clientY - rect.top) / Math.max(1, rect.height))),
+    };
+  }, []);
+
+  const commitSubjectRect = useCallback(
+    (rect: { x0: number; y0: number; x1: number; y1: number }) => {
+      if (!subjectSelect) return;
+      if (!activeAsset) {
+        notify('Select a media asset first.', 'warn');
+        return;
+      }
+      const source = activeItem?.source;
+      if (!source || source.width < 1 || source.height < 1) {
+        notify('Connect this extractor to a media input first.', 'warn');
+        return;
+      }
+      const left = Math.min(rect.x0, rect.x1);
+      const right = Math.max(rect.x0, rect.x1);
+      const top = Math.min(rect.y0, rect.y1);
+      const bottom = Math.max(rect.y0, rect.y1);
+      if (right - left < 0.005 || bottom - top < 0.005) return;
+
+      const mask = createMask(source.width, source.height, 0);
+      const x0 = Math.max(0, Math.min(source.width, Math.round(left * source.width)));
+      const x1 = Math.max(0, Math.min(source.width, Math.round(right * source.width)));
+      const y0 = Math.max(0, Math.min(source.height, Math.round(top * source.height)));
+      const y1 = Math.max(0, Math.min(source.height, Math.round(bottom * source.height)));
+      for (let y = y0; y < y1; y++) {
+        for (let x = x0; x < x1; x++) {
+          mask.data[y * source.width + x] = 255;
+        }
+      }
+      setMaskOverride(`${subjectSelect.nodeId}:${activeAsset.id}:${subjectSelect.maskId}`, mask);
+      notify('Subject selected. Only-extracted output is now active.', 'success');
+      setSubjectRect(null);
+      subjectStartRef.current = null;
+      endSubjectSelect();
+    },
+    [activeAsset, activeItem, endSubjectSelect, notify, setMaskOverride, subjectSelect],
+  );
+
+  const finishSubjectRect = useCallback(
+    (clientX: number, clientY: number) => {
+      const start = subjectStartRef.current;
+      const end = normalizeSubjectPoint(clientX, clientY);
+      subjectStartRef.current = null;
+      if (!start || !end) return;
+      commitSubjectRect({ x0: start.x, y0: start.y, x1: end.x, y1: end.y });
+    },
+    [commitSubjectRect, normalizeSubjectPoint],
+  );
+
+  useEffect(() => {
+    if (!subjectSelect) return;
+    const onKey = (e: KeyboardEvent): void => {
+      if (e.key === 'Escape') {
+        subjectStartRef.current = null;
+        setSubjectRect(null);
+        endSubjectSelect();
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [endSubjectSelect, subjectSelect]);
 
   const fit = useCallback(
     (size?: { width: number; height: number }) => {
@@ -420,6 +495,7 @@ export function Viewer({ resizeKey }: { resizeKey?: number | string } = {}): Rea
           </Badge>
           {ditherActive ? <Badge tone="success">GPU dither</Badge> : null}
           {effectsActive ? <Badge tone="success">GPU effects</Badge> : null}
+          {videoPlaying ? <Badge tone="warn">Playback preview</Badge> : null}
         </div>
         <div className="viewer-toolbar-right">
           <IconButton
@@ -560,6 +636,52 @@ export function Viewer({ resizeKey }: { resizeKey?: number | string } = {}): Rea
                   }}
                 />
               ) : null}
+              {subjectSelect && !maskEdit ? (
+                <div
+                  className="subject-select-surface"
+                  onPointerDown={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    try {
+                      (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+                    } catch {
+                      // Synthetic pointers and some browsers may not support capture.
+                    }
+                    const p = normalizeSubjectPoint(e.clientX, e.clientY);
+                    if (!p) return;
+                    subjectStartRef.current = p;
+                    setSubjectRect({ x0: p.x, y0: p.y, x1: p.x, y1: p.y });
+                  }}
+                  onPointerMove={(e) => {
+                    const start = subjectStartRef.current;
+                    if (!start) return;
+                    const p = normalizeSubjectPoint(e.clientX, e.clientY);
+                    if (!p) return;
+                    setSubjectRect({ x0: start.x, y0: start.y, x1: p.x, y1: p.y });
+                  }}
+                  onPointerUp={(e) => {
+                    finishSubjectRect(e.clientX, e.clientY);
+                  }}
+                  onPointerCancel={() => {
+                    subjectStartRef.current = null;
+                    setSubjectRect(null);
+                  }}
+                >
+                  <span className="subject-select-hint">Drag a box around the subject · Esc to cancel</span>
+                  {subjectRect ? (
+                    <div
+                      className="subject-select-rect"
+                      style={{
+                        left: `${Math.min(subjectRect.x0, subjectRect.x1) * 100}%`,
+                        top: `${Math.min(subjectRect.y0, subjectRect.y1) * 100}%`,
+                        width: `${Math.abs(subjectRect.x1 - subjectRect.x0) * 100}%`,
+                        height: `${Math.abs(subjectRect.y1 - subjectRect.y0) * 100}%`,
+                      }}
+                    />
+                  ) : null}
+                </div>
+              ) : null}
+
               {maskEdit ? (
                 <canvas
                   ref={maskCanvasRef}
