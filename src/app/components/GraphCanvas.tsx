@@ -13,6 +13,8 @@ const PORT_START = 16;
 const PORT_STEP = 22;
 const FOOTER_H = 38;
 const PREVIEW_H = 72;
+const PORT_DOT_INSET = 9;
+const PORT_ROW_CENTER = 11;
 
 const TYPE_ICON: Record<GraphNodeType, IconName> = {
   input: 'image',
@@ -125,6 +127,10 @@ interface LinkState {
   type: string;
   x: number;
   y: number;
+  startX: number;
+  startY: number;
+  moved: boolean;
+  pending: boolean;
 }
 
 export function GraphCanvas(): React.ReactElement {
@@ -151,9 +157,15 @@ export function GraphCanvas(): React.ReactElement {
   const [drag, setDrag] = useState<DragState | null>(null);
   const [pan, setPan] = useState<{ x: number; y: number; vx: number; vy: number } | null>(null);
   const [link, setLink] = useState<LinkState | null>(null);
+  const linkRef = useRef<LinkState | null>(null);
   const [addOpen, setAddOpen] = useState(false);
   const [addSearch, setAddSearch] = useState('');
   const userMovedRef = useRef(false);
+
+  const setLinkState = useCallback((next: LinkState | null) => {
+    linkRef.current = next;
+    setLink(next);
+  }, []);
 
   const effectivePositions = useMemo(() => {
     const map = new Map<string, { x: number; y: number }>();
@@ -278,30 +290,81 @@ export function GraphCanvas(): React.ReactElement {
     };
   }, [pan]);
 
+  const finishLink = useCallback(
+    (toNode: string, toPort: string, toType: string): boolean => {
+      const current = linkRef.current;
+      if (!current) return false;
+      if (current.type !== toType) return false;
+      // Clear first so the input's handler and the global pointerup handler
+      // cannot create the same edge twice.
+      setLinkState(null);
+      addEdge(current.fromNode, current.fromPort, toNode, toPort);
+      return true;
+    },
+    [addEdge, setLinkState],
+  );
+
   useEffect(() => {
-    if (!link) return;
     const onMove = (e: PointerEvent): void => {
+      const current = linkRef.current;
+      if (!current) return;
       const el = viewportRef.current;
       if (!el) return;
       const rect = el.getBoundingClientRect();
-      setLink((prev) =>
-        prev
-          ? {
-              ...prev,
-              x: (e.clientX - rect.left - view.x) / view.zoom,
-              y: (e.clientY - rect.top - view.y) / view.zoom,
-            }
-          : prev,
-      );
+      const moved =
+        current.moved ||
+        Math.abs(e.clientX - current.startX) + Math.abs(e.clientY - current.startY) > 4;
+      const next: LinkState = {
+        ...current,
+        x: (e.clientX - rect.left - view.x) / view.zoom,
+        y: (e.clientY - rect.top - view.y) / view.zoom,
+        moved,
+      };
+      linkRef.current = next;
+      setLink(next);
     };
-    const onUp = (): void => setLink(null);
+
+    const onUp = (e: PointerEvent): void => {
+      const current = linkRef.current;
+      if (!current) return;
+      const target = document
+        .elementFromPoint(e.clientX, e.clientY)
+        ?.closest('[data-port-in]') as HTMLElement | null;
+      if (target) {
+        const nodeId = target.dataset.nodeId;
+        const portId = target.dataset.portId;
+        const portType = target.dataset.portType;
+        if (nodeId && portId && portType) {
+          if (finishLink(nodeId, portId, portType)) return;
+        }
+      }
+      // A quick click on the output port enters "pending" mode: the next input
+      // port click completes the connection. A click elsewhere cancels.
+      if (!current.moved && !current.pending) {
+        const next = { ...current, pending: true };
+        linkRef.current = next;
+        setLink(next);
+        return;
+      }
+      setLinkState(null);
+    };
+
     window.addEventListener('pointermove', onMove);
     window.addEventListener('pointerup', onUp);
     return () => {
       window.removeEventListener('pointermove', onMove);
       window.removeEventListener('pointerup', onUp);
     };
-  }, [link, view]);
+  }, [finishLink, setLinkState, view]);
+
+  useEffect(() => {
+    if (!link) return;
+    const onKey = (e: KeyboardEvent): void => {
+      if (e.key === 'Escape') setLinkState(null);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [link, setLinkState]);
 
   const startLink = (node: GraphNode, port: string, type: string, e: React.PointerEvent): void => {
     e.stopPropagation();
@@ -309,19 +372,17 @@ export function GraphCanvas(): React.ReactElement {
     const pos = effectivePositions.get(node.id)!;
     const def = NODE_DEFS[node.type];
     const idx = def.outputs.findIndex((p) => p.id === port);
-    setLink({
+    setLinkState({
       fromNode: node.id,
       fromPort: port,
       type,
-      x: pos.x + NODE_WIDTH,
-      y: pos.y + HEADER_H + PORT_START + idx * PORT_STEP + 7,
+      x: pos.x + NODE_WIDTH - PORT_DOT_INSET,
+      y: pos.y + HEADER_H + PORT_START + idx * PORT_STEP + PORT_ROW_CENTER,
+      startX: e.clientX,
+      startY: e.clientY,
+      moved: false,
+      pending: false,
     });
-  };
-
-  const completeLink = (node: GraphNode, port: string): void => {
-    if (!link) return;
-    addEdge(link.fromNode, link.fromPort, node.id, port);
-    setLink(null);
   };
 
   const worldCenter = (): { x: number; y: number } => {
@@ -352,6 +413,14 @@ export function GraphCanvas(): React.ReactElement {
           <span className="graph-meta">
             {graph.nodes.length} nodes · {graph.edges.length} links
           </span>
+          {link ? (
+            <span className={`link-hint ${link.pending ? 'is-pending' : ''}`}>
+              {link.pending ? 'Click an input port to connect' : 'Drop on an input port'}
+              <button type="button" className="text-btn" onClick={() => setLinkState(null)}>
+                cancel
+              </button>
+            </span>
+          ) : null}
         </div>
         <div className="graph-toolbar-right">
           <button
@@ -410,6 +479,10 @@ export function GraphCanvas(): React.ReactElement {
         className={`graph-viewport ${pan ? 'is-panning' : ''} ${link ? 'is-linking' : ''}`}
         onPointerDown={(e) => {
           if (e.target !== e.currentTarget && !(e.target as HTMLElement).classList.contains('graph-grid')) return;
+          if (linkRef.current) {
+            setLinkState(null);
+            return;
+          }
           selectNode(null);
           userMovedRef.current = true;
           setPan({ x: e.clientX, y: e.clientY, vx: view.x, vy: view.y });
@@ -448,10 +521,10 @@ export function GraphCanvas(): React.ReactElement {
               const inIdx = NODE_DEFS[to.type].inputs.findIndex((p) => p.id === edge.toPort);
               if (inIdx < 0) return null;
               const outPort = fromDef.outputs[outIdx];
-              const x1 = fp.x + NODE_WIDTH;
-              const y1 = fp.y + HEADER_H + PORT_START + outIdx * PORT_STEP + 7;
-              const x2 = tp.x;
-              const y2 = tp.y + HEADER_H + PORT_START + inIdx * PORT_STEP + 7;
+              const x1 = fp.x + NODE_WIDTH - PORT_DOT_INSET;
+              const y1 = fp.y + HEADER_H + PORT_START + outIdx * PORT_STEP + PORT_ROW_CENTER;
+              const x2 = tp.x + PORT_DOT_INSET;
+              const y2 = tp.y + HEADER_H + PORT_START + inIdx * PORT_STEP + PORT_ROW_CENTER;
               const dx = Math.max(50, Math.abs(x2 - x1) * 0.45);
               const d = `M ${x1} ${y1} C ${x1 + dx} ${y1}, ${x2 - dx} ${y2}, ${x2} ${y2}`;
               const color = edgeColor(outPort.type);
@@ -467,8 +540,8 @@ export function GraphCanvas(): React.ReactElement {
             })}
             {link ? (
               <path
-                d={`M ${effectivePositions.get(link.fromNode)!.x + NODE_WIDTH} ${
-                  effectivePositions.get(link.fromNode)!.y + HEADER_H + PORT_START + 7 +
+                d={`M ${effectivePositions.get(link.fromNode)!.x + NODE_WIDTH - PORT_DOT_INSET} ${
+                  effectivePositions.get(link.fromNode)!.y + HEADER_H + PORT_START + PORT_ROW_CENTER +
                   Math.max(0, NODE_DEFS[graph.nodes.find((n) => n.id === link.fromNode)!.type].outputs.findIndex((p) => p.id === link.fromPort)) * PORT_STEP
                 } C ${link.x} ${link.y}, ${link.x} ${link.y}, ${link.x} ${link.y}`}
                 stroke={edgeColor(link.type)}
@@ -561,18 +634,22 @@ export function GraphCanvas(): React.ReactElement {
                   {def.inputs.map((port, i) => (
                     <div
                       key={port.id}
-                      className="node-port node-port-in"
+                      className={`node-port node-port-in ${
+                        link ? (link.type === port.type ? 'is-compatible' : 'is-incompatible') : ''
+                      }`}
                       style={{ top: PORT_START + i * PORT_STEP }}
+                      data-port-in="true"
+                      data-node-id={node.id}
+                      data-port-id={port.id}
+                      data-port-type={port.type}
+                      title={`${port.label} (${port.type}) — drop a connection here`}
+                      onPointerUp={() => finishLink(node.id, port.id, port.type)}
                     >
                       <button
                         type="button"
                         className={`port-dot port-${port.type}`}
-                        title={`${port.label} (${port.type})`}
-                        onPointerUp={(e) => {
-                          e.stopPropagation();
-                          completeLink(node, port.id);
-                        }}
-                        data-port-type={port.type}
+                        aria-hidden="true"
+                        tabIndex={-1}
                       />
                       <span>{port.label}</span>
                       {port.multiple ? <em>multi</em> : null}
@@ -588,7 +665,8 @@ export function GraphCanvas(): React.ReactElement {
                       <button
                         type="button"
                         className={`port-dot port-${port.type}`}
-                        title={`${port.label} (${port.type})`}
+                        title={`Drag from ${port.label} (${port.type}) to an input port`}
+                        data-port-out="true"
                         onPointerDown={(e) => startLink(node, port.id, port.type, e)}
                       />
                     </div>
@@ -612,7 +690,8 @@ export function GraphCanvas(): React.ReactElement {
 
         <div className="graph-hint">
           <Icon name="graph" size={14} />
-          Drag nodes · drag ports to connect · wheel to zoom · double-click a wire to cut
+          Drag nodes · drag an output to any input row (or click output, then input) · wheel to zoom ·
+          double-click a wire to cut
           {mode === 'graph' ? ' · click nodes to preview that stage' : ''}
         </div>
       </div>
