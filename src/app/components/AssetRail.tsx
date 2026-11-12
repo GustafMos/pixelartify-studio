@@ -1,4 +1,4 @@
-import React, { useRef } from 'react';
+import React, { useMemo, useRef } from 'react';
 import { useStudio } from '../store';
 import { Icon } from './icons';
 import { Badge, IconButton } from './controls';
@@ -25,6 +25,19 @@ export function AssetRail(): React.ReactElement {
   const outputs = graph.nodes.filter((n) => n.type === 'output');
   const selectedInput = graph.nodes.find((n) => n.type === 'input' && n.id === selectedNodeId) ?? inputs[0];
   const targetInput = selectedInput ?? inputs[0];
+
+  const railAssets = useMemo(() => {
+    const seen = new Set<string>();
+    const out: Array<{ nodeId: string; asset: (typeof assetsByNode)[string][number] }> = [];
+    for (const [nodeId, assets] of Object.entries(assetsByNode)) {
+      for (const asset of assets) {
+        if (seen.has(asset.id)) continue;
+        seen.add(asset.id);
+        out.push({ nodeId, asset });
+      }
+    }
+    return out;
+  }, [assetsByNode]);
 
   return (
     <aside className="asset-rail">
@@ -105,29 +118,27 @@ export function AssetRail(): React.ReactElement {
       <div className="rail-section rail-assets">
         <div className="rail-heading">
           <span>Media</span>
-          <span className="rail-count">{Object.values(assetsByNode).flat().length}</span>
+          <span className="rail-count">{railAssets.length}</span>
         </div>
         <div className="rail-asset-grid">
-          {Object.entries(assetsByNode).flatMap(([nodeId, assets]) =>
-            assets.map((asset) => (
-              <button
-                key={asset.id}
-                type="button"
-                className={`rail-thumb ${activeAsset?.id === asset.id ? 'is-active' : ''}`}
-                onClick={() => {
-                  setActiveAsset(asset.id);
-                  selectNode(nodeId);
-                }}
-                title={`${asset.name}\n${asset.width}×${asset.height}`}
-              >
-                <img src={asset.thumb} alt="" draggable={false} />
-                {asset.kind === 'video' ? <span className="thumb-video"><Icon name="video" size={10} /></span> : null}
-                <span className="thumb-name">{asset.name}</span>
-              </button>
-            )),
-          )}
+          {railAssets.map(({ nodeId, asset }) => (
+            <button
+              key={asset.id}
+              type="button"
+              className={`rail-thumb ${activeAsset?.id === asset.id ? 'is-active' : ''}`}
+              onClick={() => {
+                setActiveAsset(asset.id);
+                selectNode(nodeId);
+              }}
+              title={`${asset.name}\n${asset.width}×${asset.height}`}
+            >
+              <img src={asset.thumb} alt="" draggable={false} />
+              {asset.kind === 'video' ? <span className="thumb-video"><Icon name="video" size={10} /></span> : null}
+              <span className="thumb-name">{asset.name}</span>
+            </button>
+          ))}
         </div>
-        {Object.values(assetsByNode).flat().length === 0 ? (
+        {railAssets.length === 0 ? (
           <div className="rail-empty-state">
             <Icon name="image" size={22} />
             <span>No media imported</span>

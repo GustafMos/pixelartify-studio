@@ -46,7 +46,6 @@ import {
   type GraphMediaItem,
 } from '../core/graph';
 import { loadGraph, saveGraph, loadUserPresets, saveUserPresets, loadUserPalettes, saveUserPalettes, loadActivePaletteId, saveActivePaletteId, loadUiMode, saveUiMode, loadRecentNodes, saveRecentNodes } from './storage';
-import { computeArtSize } from '../core/resolution';
 import {
   decodeImageFile,
   downloadText,
@@ -141,7 +140,6 @@ interface StudioContextValue {
   setPaletteStudioOpen: (open: boolean) => void;
   setVideoTime: (time: number) => void;
   setVideoPlaying: (playing: boolean) => void;
-  onPlaybackFrame: (image: PixelImage, time: number) => void;
   beginSubjectSelect: (nodeId: string, maskId: string, mode?: 'magic' | 'box') => void;
   endSubjectSelect: () => void;
   setPreviewFullQuality: (full: boolean) => void;
@@ -243,7 +241,6 @@ export function StudioProvider({ children }: { children: React.ReactNode }): Rea
   const toastIdRef = useRef(1);
   const renderGenRef = useRef(0);
   const videoLoadRef = useRef(0);
-  const playbackPaletteRef = useRef<{ key: string; colors: string[] } | null>(null);
 
   const notify = useCallback((message: string, kind: Toast['kind'] = 'info') => {
     const id = toastIdRef.current++;
@@ -367,6 +364,12 @@ export function StudioProvider({ children }: { children: React.ReactNode }): Rea
       setIsRendering(false);
       return;
     }
+    // Playback frames are painted directly by the viewer; don't re-render the
+    // whole React tree for every video frame.
+    if (videoPlaying && activeAsset?.kind === 'video') {
+      setIsRendering(false);
+      return;
+    }
     const gen = ++renderGenRef.current;
     setIsRendering(true);
     setPreviewError(null);
@@ -374,31 +377,6 @@ export function StudioProvider({ children }: { children: React.ReactNode }): Rea
     const timer = window.setTimeout(() => {
       try {
         const settings = settingsFromItem(activeItem);
-        let renderSettings = settings;
-        if (videoPlaying && settings.pixelate.enabled !== false) {
-          const art = computeArtSize(activeItem.sourceWidth, activeItem.sourceHeight, settings.resolution);
-          const short = Math.min(art.width, art.height);
-          if (short > 320) {
-            renderSettings = {
-              ...settings,
-              resolution: { ...settings.resolution, mode: 'short-side', value: 320 },
-            };
-          }
-        }
-        const paletteKey = videoPlaying
-          ? [
-              activeItem.assetId,
-              settings.palette.mode,
-              settings.palette.autoCount,
-              settings.palette.quantizer,
-              settings.dither.algorithm,
-              settings.palette.colors.join(','),
-            ].join('|')
-          : '';
-        const paletteOverride =
-          videoPlaying && playbackPaletteRef.current?.key === paletteKey
-            ? playbackPaletteRef.current.colors
-            : undefined;
         let source = activeItem.source;
         let masks = activeItem.masks;
         if (activeAsset?.kind === 'video' && videoFrame) {
@@ -406,18 +384,14 @@ export function StudioProvider({ children }: { children: React.ReactNode }): Rea
           masks = { ...masks };
         }
         const result = renderPixelArt(
-          { image: source, masks, settings: renderSettings },
+          { image: source, masks, settings },
           {
             stopAfter: stopStageForNode(previewNode.type),
             upscale: false,
             seed: 0,
-            maxWorkingSide: videoPlaying ? 640 : previewFullQuality ? 2048 : 1200,
-            paletteOverride,
+            maxWorkingSide: previewFullQuality ? 2048 : 1200,
           },
         );
-        if (videoPlaying && result.palette.length > 0) {
-          playbackPaletteRef.current = { key: paletteKey, colors: result.palette };
-        }
         if (gen === renderGenRef.current) {
           setPreview(result);
           setIsRendering(false);
@@ -428,10 +402,10 @@ export function StudioProvider({ children }: { children: React.ReactNode }): Rea
           setIsRendering(false);
         }
       }
-    }, videoPlaying ? 0 : 110);
+    }, 110);
 
     return () => window.clearTimeout(timer);
-  }, [previewNode, activeItem, activeAsset, videoFrame, videoPlaying, previewFullQuality, trackedMasks]);
+  }, [previewNode, activeItem, activeAsset, videoFrame, videoPlaying, previewFullQuality, videoTime, trackedMasks]);
 
   // Persist the graph and libraries.
   useEffect(() => {
@@ -506,10 +480,6 @@ export function StudioProvider({ children }: { children: React.ReactNode }): Rea
   const setVideoPlaying = useCallback((playing: boolean) => {
     setVideoPlayingState(playing);
     if (!playing) setVideoFrameLoading(false);
-  }, []);
-  const onPlaybackFrame = useCallback((image: PixelImage, time: number) => {
-    setVideoFrame(image);
-    setVideoTimeState(Math.max(0, time));
   }, []);
   const beginSubjectSelect = useCallback(
     (nodeId: string, maskId: string, mode: 'magic' | 'box' = 'magic') => {
@@ -1400,7 +1370,6 @@ export function StudioProvider({ children }: { children: React.ReactNode }): Rea
     setPaletteStudioOpen: setPaletteStudioOpenCb,
     setVideoTime,
     setVideoPlaying,
-    onPlaybackFrame,
     beginSubjectSelect,
     endSubjectSelect,
     setPreviewFullQuality,

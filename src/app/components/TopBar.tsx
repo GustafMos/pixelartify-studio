@@ -1,6 +1,7 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { createPreset, serializePreset } from '../../core';
 import { useStudio } from '../store';
+import { presetCpuSummary } from '../bottlenecks';
 import { downloadText } from '../io';
 import { Badge, IconButton, Modal, TextArea, TextField } from './controls';
 import { Icon } from './icons';
@@ -36,6 +37,12 @@ export function TopBar(): React.ReactElement {
     const q = search.trim().toLowerCase();
     return !q || p.name.toLowerCase().includes(q) || p.tags?.some((t) => t.includes(q));
   });
+
+  const presetWarnings = useMemo(() => {
+    const map = new Map<string, ReturnType<typeof presetCpuSummary>>();
+    for (const preset of presets) map.set(preset.id, presetCpuSummary(preset.graph));
+    return map;
+  }, [presets]);
 
   useEffect(() => {
     const onSave = (): void => setSaveOpen(true);
@@ -100,6 +107,7 @@ export function TopBar(): React.ReactElement {
             <div className="preset-list">
               {filtered.map((preset) => {
                 const isUser = userPresets.some((p) => p.id === preset.id);
+                const cpu = presetWarnings.get(preset.id);
                 return (
                   <div key={preset.id} className="preset-row">
                     <button
@@ -114,7 +122,14 @@ export function TopBar(): React.ReactElement {
                         {preset.thumbnail ? <img src={preset.thumbnail} alt="" /> : <Icon name="sparkles" size={18} />}
                       </span>
                       <span className="preset-meta">
-                        <strong>{preset.name}</strong>
+                        <strong>
+                          {preset.name}
+                          {cpu ? (
+                            <span className="preset-warning" title={cpu.detail}>
+                              !
+                            </span>
+                          ) : null}
+                        </strong>
                         <small>{preset.description}</small>
                         {preset.tags?.length ? (
                           <span className="preset-tags">
@@ -123,6 +138,7 @@ export function TopBar(): React.ReactElement {
                             ))}
                           </span>
                         ) : null}
+                        {cpu ? <span className="preset-cpu">CPU: {cpu.short}</span> : null}
                       </span>
                     </button>
                     <div className="preset-actions">
@@ -141,6 +157,9 @@ export function TopBar(): React.ReactElement {
               })}
               {filtered.length === 0 ? <p className="micro-copy">No presets match.</p> : null}
             </div>
+            <p className="preset-cpu-legend">
+              <span className="preset-warning">!</span> uses CPU-heavy stages at the current settings
+            </p>
             <div className="preset-footer">
               <button type="button" className="ghost-btn small" onClick={() => importRef.current?.click()}>
                 <Icon name="upload" size={14} /> Import preset

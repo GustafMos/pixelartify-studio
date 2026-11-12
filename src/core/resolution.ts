@@ -131,8 +131,7 @@ export function computeWorkingSize(
   // art size it adds cost without visible detail. Small art keeps a higher
   // factor because the absolute pixel count stays cheap.
   let factor = 2;
-  if (long <= 192) factor = 5;
-  else if (long <= 384) factor = 4;
+  if (long <= 192) factor = 4;
 
   let workW = aw * factor;
   let workH = ah * factor;

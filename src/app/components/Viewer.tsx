@@ -3,7 +3,10 @@ import { createMask, featherMask, invertMask } from '../../core/image';
 import { buildMagicMask, type MagicSeed } from '../../core/magic';
 import type { GraphNode, MaskData, PixelImage } from '../../core/types';
 import { useStudio } from '../store';
-import { pixelImageToDataUrl } from '../io';
+import { pixelImageToBlob, downloadBlob, pixelImageToDataUrl } from '../io';
+import { renderPixelArt, settingsFromItem } from '../../core';
+import { applyTrackedAlphaCuts } from '../../core/graph';
+import { playbackPaletteKey, playbackSettings } from '../playback';
 import { GPU_MIN_PIXELS, gpuAvailable } from '../gpuPixelate';
 import { GPU_MIN_DITHER_PIXELS, gpuDitherAvailable, supportsGpuDither } from '../gpuFinish';
 import { GPU_MIN_EFFECT_PIXELS, gpuEffectsAvailable, supportsGpuEffects } from '../gpuEffects';
@@ -22,13 +25,13 @@ export function Viewer({ resizeKey }: { resizeKey?: number | string } = {}): Rea
     videoFrameLoading,
     videoPlaying,
     setVideoPlaying,
-    onPlaybackFrame,
     activeItem,
     subjectSelect,
     endSubjectSelect,
     maskTracking,
     trackSubject,
     clearTrackedMask,
+    trackedMasks,
     maskEdit,
     endMaskEdit,
     setMaskEdit,
@@ -47,11 +50,13 @@ export function Viewer({ resizeKey }: { resizeKey?: number | string } = {}): Rea
   const viewportRef = useRef<HTMLDivElement>(null);
   const wrapperRef = useRef<HTMLDivElement>(null);
   const maskCanvasRef = useRef<HTMLCanvasElement>(null);
+  const artCanvasRef = useRef<HTMLCanvasElement>(null);
   const paintRef = useRef<MaskData | null>(null);
   const paintingRef = useRef(false);
   const panRef = useRef<{ x: number; y: number; px: number; py: number } | null>(null);
   const videoElRef = useRef<HTMLVideoElement | null>(null);
   const videoCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const playbackPaletteRef = useRef<{ key: string; colors: string[] } | null>(null);
   const videoTimeRef = useRef(videoTime);
   videoTimeRef.current = videoTime;
   const [scale, setScale] = useState(1);
@@ -75,7 +80,6 @@ export function Viewer({ resizeKey }: { resizeKey?: number | string } = {}): Rea
   const art = preview?.art ?? null;
   const artW = art?.width ?? 1;
   const artH = art?.height ?? 1;
-  const artUrl = useMemo(() => (art ? pixelImageToDataUrl(art) : null), [art]);
   const gpuSampler = useMemo(() => gpuAvailable(), []);
   const gpuActive = gpuSampler && artW * artH >= GPU_MIN_PIXELS;
   const ditherSampler = useMemo(() => gpuDitherAvailable(), []);
@@ -96,6 +100,22 @@ export function Viewer({ resizeKey }: { resizeKey?: number | string } = {}): Rea
       ]) ||
         supportsGpuEffects('postprocess', activeItem.postprocess.ops)),
   );
+
+  const paintArt = useCallback((image: PixelImage) => {
+    const canvas = artCanvasRef.current;
+    if (!canvas) return;
+    if (canvas.width !== image.width) canvas.width = image.width;
+    if (canvas.height !== image.height) canvas.height = image.height;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    const frame = ctx.createImageData(image.width, image.height);
+    frame.data.set(image.data);
+    ctx.putImageData(frame, 0, 0);
+  }, []);
+
+  useEffect(() => {
+    if (art) paintArt(art);
+  }, [art, paintArt]);
 
   // Set up a hidden <video> used for smooth playback. The normal preview path
   // still decodes through Mediabunny; playback bypasses it to avoid opening a
@@ -146,6 +166,10 @@ export function Viewer({ resizeKey }: { resizeKey?: number | string } = {}): Rea
       setVideoPlaying(false);
       return;
     }
+    if (!activeItem) {
+      setVideoPlaying(false);
+      return;
+    }
     const canvas = videoCanvasRef.current ?? document.createElement('canvas');
     videoCanvasRef.current = canvas;
     const ctx = canvas.getContext('2d', { willReadFrequently: true });
@@ -153,42 +177,86 @@ export function Viewer({ resizeKey }: { resizeKey?: number | string } = {}): Rea
       setVideoPlaying(false);
       return;
     }
-    let raf = 0;
-    let lastSample = 0;
+
+    const baseSettings = settingsFromItem(activeItem);
+    const renderSettings = playbackSettings(baseSettings, activeItem);
+    const paletteKey = playbackPaletteKey(baseSettings, activeItem.assetId);
+    let timer = 0;
+    let lastTimeUpdate = 0;
+    let stopped = false;
+
     const tick = () => {
+      if (stopped) return;
       const video = videoElRef.current;
-      if (!video) return;
-      const now = performance.now();
-      if (now - lastSample >= 55 && video.videoWidth > 0) {
-        lastSample = now;
-        const maxSide = 960;
-        const s = Math.min(1, maxSide / Math.max(video.videoWidth, video.videoHeight));
-        const w = Math.max(1, Math.round(video.videoWidth * s));
-        const h = Math.max(1, Math.round(video.videoHeight * s));
+      if (!video || video.videoWidth === 0) {
+        timer = window.setTimeout(tick, 40);
+        return;
+      }
+      const started = performance.now();
+      try {
+        const maxSide = 640;
+        const scale = Math.min(1, maxSide / Math.max(video.videoWidth, video.videoHeight));
+        const w = Math.max(1, Math.round(video.videoWidth * scale));
+        const h = Math.max(1, Math.round(video.videoHeight * scale));
         if (canvas.width !== w || canvas.height !== h) {
           canvas.width = w;
           canvas.height = h;
         }
         ctx.drawImage(video, 0, 0, w, h);
         const data = ctx.getImageData(0, 0, w, h);
-        onPlaybackFrame(
-          { width: w, height: h, data: new Uint8ClampedArray(data.data) },
-          video.currentTime,
+        const time = video.currentTime;
+        const frame: PixelImage = {
+          width: w,
+          height: h,
+          data: new Uint8ClampedArray(data.data),
+        };
+        const source = applyTrackedAlphaCuts(activeItem, frame, time, trackedMasks);
+        const paletteOverride =
+          playbackPaletteRef.current?.key === paletteKey
+            ? playbackPaletteRef.current.colors
+            : undefined;
+        const result = renderPixelArt(
+          { image: source, masks: activeItem.masks, settings: renderSettings },
+          { upscale: false, seed: 0, maxWorkingSide: 384, paletteOverride },
         );
+        if (result.palette.length > 0) {
+          playbackPaletteRef.current = { key: paletteKey, colors: result.palette };
+        }
+        paintArt(result.art);
+        if (started - lastTimeUpdate > 250) {
+          lastTimeUpdate = started;
+          setVideoTime(time);
+        }
+      } catch (err) {
+        stopped = true;
+        setVideoPlaying(false);
+        notify(`Playback render failed: ${err instanceof Error ? err.message : err}`, 'error');
+        return;
       }
-      raf = requestAnimationFrame(tick);
+      const elapsed = performance.now() - started;
+      timer = window.setTimeout(tick, Math.max(0, 40 - elapsed));
     };
+
     el.loop = true;
     void el.play().catch(() => {
       setVideoPlaying(false);
       notify('Could not play this video in the browser.', 'warn');
     });
-    raf = requestAnimationFrame(tick);
+    tick();
     return () => {
-      cancelAnimationFrame(raf);
+      stopped = true;
+      window.clearTimeout(timer);
       el.pause();
     };
-  }, [videoPlaying, onPlaybackFrame, notify, setVideoPlaying]);
+  }, [
+    activeItem,
+    notify,
+    paintArt,
+    setVideoPlaying,
+    setVideoTime,
+    trackedMasks,
+    videoPlaying,
+  ]);
 
   const togglePlayback = useCallback(() => {
     const el = videoElRef.current;
@@ -536,10 +604,11 @@ export function Viewer({ resizeKey }: { resizeKey?: number | string } = {}): Rea
   }, [panning]);
 
   const originalUrl = useMemo(() => {
+    if (!compare) return null;
     if (videoFrame) return pixelImageToDataUrl(videoFrame);
     if (activeAsset) return pixelImageToDataUrl(activeAsset.image);
     return null;
-  }, [activeAsset, videoFrame]);
+  }, [activeAsset, compare, videoFrame]);
 
   const setCompareFromClientX = useCallback((clientX: number) => {
     const rect = wrapperRef.current?.getBoundingClientRect();
@@ -724,8 +793,13 @@ export function Viewer({ resizeKey }: { resizeKey?: number | string } = {}): Rea
           {preview ? (
             <a
               className="icon-btn"
-              href={artUrl ?? undefined}
-              download={`${(activeAsset?.name ?? 'pixelart').replace(/\.[^.]+$/, '')}-${artW}x${artH}.png`}
+              href="#"
+              onClick={(e) => {
+                e.preventDefault();
+                if (!art) return;
+                const name = `${(activeAsset?.name ?? 'pixelart').replace(/\.[^.]+$/, '')}-${artW}x${artH}.png`;
+                void pixelImageToBlob(art, 'png', 1).then((blob) => downloadBlob(blob, name));
+              }}
               title="Quick save preview PNG"
             >
               <Icon name="download" size={17} />
@@ -771,14 +845,14 @@ export function Viewer({ resizeKey }: { resizeKey?: number | string } = {}): Rea
                 height: artH * scale,
               }}
             >
-              <img
-                className="art-image"
-                src={artUrl ?? undefined}
-                alt="Pixel art preview"
-                width={artW * scale}
-                height={artH * scale}
-                draggable={false}
-                style={{ imageRendering: 'pixelated' }}
+              <canvas
+                ref={artCanvasRef}
+                className="art-canvas"
+                width={artW}
+                height={artH}
+                role="img"
+                aria-label="Pixel art preview"
+                style={{ width: '100%', height: '100%', imageRendering: 'pixelated' }}
               />
               {compare && originalUrl && !maskEdit ? (
                 <>

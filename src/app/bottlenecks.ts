@@ -166,3 +166,28 @@ export function nodeCpuWarning(node: GraphNode, graph: PipelineGraph): CpuWarnin
       return null;
   }
 }
+
+export interface PresetCpuSummary {
+  count: number;
+  short: string;
+  detail: string;
+}
+
+/** Aggregate CPU warnings for a preset graph, for preset-browser badges. */
+export function presetCpuSummary(graph: PipelineGraph): PresetCpuSummary | null {
+  const warnings: Array<{ node: GraphNode; warning: CpuWarning }> = [];
+  for (const node of graph.nodes) {
+    const warning = nodeCpuWarning(node, graph);
+    if (warning) warnings.push({ node, warning });
+  }
+  if (warnings.length === 0) return null;
+  const labels = warnings
+    .map(({ warning }) => warning.title.replace(/^CPU\s+/i, ''))
+    .filter((v, i, arr) => arr.indexOf(v) === i);
+  const nodes = warnings.map(({ node }) => node.title).filter((v, i, arr) => arr.indexOf(v) === i);
+  return {
+    count: warnings.length,
+    short: labels.join(' · '),
+    detail: `${nodes.join(', ')}: ${warnings.map(({ warning }) => warning.detail).join(' ')}`,
+  };
+}

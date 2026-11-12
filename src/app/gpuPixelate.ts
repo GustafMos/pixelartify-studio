@@ -13,7 +13,7 @@
 
 import type { PixelImage } from '../core/types';
 import type { PixelateSourceOptions } from '../core/pixelate';
-import { buildEdgeMap } from '../core/edges';
+import { buildEdgeMap, type EdgeMap } from '../core/edges';
 import { buildIntegral } from '../core/image';
 
 const VERTEX = `#version 300 es
@@ -233,6 +233,82 @@ void main() {
   outColor = vec4(color, alpha);
 }`;
 
+const GRADIENT_FRAGMENT = `#version 300 es
+precision highp float;
+precision highp int;
+precision highp sampler2D;
+
+uniform sampler2D uSrc;
+uniform ivec2 uSize;
+
+out vec4 outColor;
+
+float gray(ivec2 p) {
+  vec4 c = texelFetch(uSrc, clamp(p, ivec2(0), uSize - ivec2(1)), 0);
+  return (0.2126 * c.r + 0.7152 * c.g + 0.0722 * c.b) * 255.0;
+}
+
+void main() {
+  ivec2 p = ivec2(gl_FragCoord.xy);
+  ivec2 hi = uSize - ivec2(1);
+  ivec2 pm = ivec2(max(p.x - 1, 0), max(p.y - 1, 0));
+  ivec2 pp = ivec2(min(p.x + 1, hi.x), min(p.y + 1, hi.y));
+
+  float tl = gray(pm);
+  float tc = gray(ivec2(p.x, pm.y));
+  float tr = gray(ivec2(pp.x, pm.y));
+  float ml = gray(ivec2(pm.x, p.y));
+  float mr = gray(ivec2(pp.x, p.y));
+  float bl = gray(ivec2(pm.x, pp.y));
+  float bc = gray(ivec2(p.x, pp.y));
+  float br = gray(pp);
+
+  float dx = -tl + tr - 2.0 * ml + 2.0 * mr - bl + br;
+  float dy = -tl - 2.0 * tc - tr + bl + 2.0 * bc + br;
+
+  vec4 cL = texelFetch(uSrc, ivec2(pm.x, p.y), 0) * 255.0;
+  vec4 cR = texelFetch(uSrc, ivec2(pp.x, p.y), 0) * 255.0;
+  vec4 cU = texelFetch(uSrc, ivec2(p.x, pm.y), 0) * 255.0;
+  vec4 cD = texelFetch(uSrc, ivec2(p.x, pp.y), 0) * 255.0;
+  dx += (abs(cR.r - cL.r) + abs(cR.g - cL.g) + abs(cR.b - cL.b)) * 0.15;
+  dy += (abs(cD.r - cU.r) + abs(cD.g - cU.g) + abs(cD.b - cU.b)) * 0.15;
+
+  outColor = vec4(dx, dy, sqrt(dx * dx + dy * dy), 1.0);
+}`;
+
+const NMS_FRAGMENT = `#version 300 es
+precision highp float;
+precision highp int;
+precision highp sampler2D;
+
+uniform sampler2D uGrad;
+uniform ivec2 uSize;
+uniform float uMinMag;
+
+out vec4 outColor;
+
+void main() {
+  ivec2 p = ivec2(gl_FragCoord.xy);
+  vec4 g = texelFetch(uGrad, p, 0);
+  float dx = g.x;
+  float dy = g.y;
+  float mag = g.z;
+  float nms = 0.0;
+  bool interior = p.x > 0 && p.y > 0 && p.x < uSize.x - 1 && p.y < uSize.y - 1;
+  if (interior && mag >= uMinMag) {
+    int nx = abs(dx) >= abs(dy) ? 1 : 0;
+    int ny = 1 - nx;
+    int sx = dx >= 0.0 ? nx : -nx;
+    int sy = dy >= 0.0 ? ny : -ny;
+    float n1 = texelFetch(uGrad, p + ivec2(-sx, -sy), 0).z;
+    float n2 = texelFetch(uGrad, p + ivec2(sx, sy), 0).z;
+    if (mag >= n1 && mag >= n2) nms = mag;
+  }
+  outColor = vec4(nms, mag, 0.0, 1.0);
+}`;
+
+
+
 interface Program {
   program: WebGLProgram;
   uniforms: Record<string, WebGLUniformLocation | null>;
@@ -240,6 +316,8 @@ interface Program {
 
 interface GpuState {
   gl: WebGL2RenderingContext;
+  gradient: Program;
+  nms: Program;
   offset: Program;
   smooth: Program;
   sample: Program;
@@ -311,6 +389,8 @@ function getState(): GpuState | null {
       return null;
     }
 
+    const gradient = createProgram(gl, GRADIENT_FRAGMENT, ['uSrc', 'uSize']);
+    const nms = createProgram(gl, NMS_FRAGMENT, ['uGrad', 'uSize', 'uMinMag']);
     const offset = createProgram(gl, OFFSET_FRAGMENT, [
       'uEdge',
       'uSrcSize',
@@ -335,6 +415,8 @@ function getState(): GpuState | null {
 
     state = {
       gl,
+      gradient,
+      nms,
       offset,
       smooth,
       sample,
@@ -358,7 +440,7 @@ export function gpuAvailable(): boolean {
  * Below this art-pixel count the CPU sampler is faster: the GPU path still has
  * to build the integral/edge maps on the CPU and pay upload/readback costs.
  */
-export const GPU_MIN_PIXELS = 48000;
+export const GPU_MIN_PIXELS = 12000;
 
 function bindProgram(gl: WebGL2RenderingContext, gpu: GpuState, p: Program): void {
   gl.useProgram(p.program);
@@ -393,6 +475,114 @@ function makeTexture(
 
 function drawFullscreen(gl: WebGL2RenderingContext): void {
   gl.drawArrays(gl.TRIANGLES, 0, 3);
+}
+
+/**
+ * Build the Sobel/chroma gradient, non-maximum suppression and percentile
+ * threshold edge map on the GPU. The CPU only scans the results to build the
+ * histogram/integral image, which is much cheaper than per-pixel Sobel/NMS.
+ */
+function buildGpuEdgeMap(
+  gpu: GpuState,
+  srcTex: WebGLTexture,
+  src: PixelImage,
+  sensitivity: number,
+): EdgeMap {
+  const { gl } = gpu;
+  const w = src.width;
+  const h = src.height;
+  const n = w * h;
+  const gradTex = makeTexture(gl, w, h, gl.RGBA32F, gl.RGBA, gl.FLOAT, null, gl.NEAREST);
+  const nmsTex = makeTexture(gl, w, h, gl.R32F, gl.RED, gl.FLOAT, null, gl.NEAREST);
+  const fb = gl.createFramebuffer();
+  if (!fb) throw new Error('Could not create edge framebuffer.');
+
+  try {
+    gl.bindFramebuffer(gl.FRAMEBUFFER, fb);
+    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, gradTex, 0);
+    if (gl.checkFramebufferStatus(gl.FRAMEBUFFER) !== gl.FRAMEBUFFER_COMPLETE) {
+      throw new Error('Gradient framebuffer incomplete.');
+    }
+    gl.viewport(0, 0, w, h);
+    gl.disable(gl.BLEND);
+    gl.disable(gl.DEPTH_TEST);
+    gl.disable(gl.SCISSOR_TEST);
+    gl.clearColor(0, 0, 0, 0);
+    gl.clear(gl.COLOR_BUFFER_BIT);
+    bindProgram(gl, gpu, gpu.gradient);
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, srcTex);
+    gl.uniform1i(gpu.gradient.uniforms.uSrc, 0);
+    gl.uniform2i(gpu.gradient.uniforms.uSize, w, h);
+    drawFullscreen(gl);
+
+    const gradData = new Float32Array(n * 4);
+    gl.readPixels(0, 0, w, h, gl.RGBA, gl.FLOAT, gradData);
+    let maxMag = 0;
+    for (let i = 0; i < n; i++) {
+      const m = gradData[i * 4 + 2];
+      if (m > maxMag) maxMag = m;
+    }
+
+    gl.bindFramebuffer(gl.FRAMEBUFFER, fb);
+    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, nmsTex, 0);
+    if (gl.checkFramebufferStatus(gl.FRAMEBUFFER) !== gl.FRAMEBUFFER_COMPLETE) {
+      throw new Error('NMS framebuffer incomplete.');
+    }
+    gl.clear(gl.COLOR_BUFFER_BIT);
+    bindProgram(gl, gpu, gpu.nms);
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, gradTex);
+    gl.uniform1i(gpu.nms.uniforms.uGrad, 0);
+    gl.uniform2i(gpu.nms.uniforms.uSize, w, h);
+    gl.uniform1f(gpu.nms.uniforms.uMinMag, maxMag * 0.02);
+    drawFullscreen(gl);
+
+    const nmsData = new Float32Array(n);
+    gl.readPixels(0, 0, w, h, gl.RED, gl.FLOAT, nmsData);
+
+    const invMax = maxMag > 0 ? 1 / maxMag : 0;
+    const keepFraction = 0.02 + Math.max(0, Math.min(1, sensitivity)) * 0.18;
+    const hist = new Uint32Array(1025);
+    for (let i = 0; i < n; i++) {
+      const v = nmsData[i] * invMax;
+      hist[Math.min(1024, Math.round(v * 1024))]++;
+    }
+    const target = n * (1 - keepFraction);
+    let acc = 0;
+    let cut = 1024;
+    for (let i = 0; i <= 1024; i++) {
+      acc += hist[i];
+      if (acc >= target) {
+        cut = i;
+        break;
+      }
+    }
+    const threshold = cut / 1024;
+    const data = new Float32Array(n);
+    for (let i = 0; i < n; i++) {
+      const v = nmsData[i] * invMax;
+      data[i] = v >= threshold ? v : 0;
+    }
+
+    const stride = w + 1;
+    const integral = new Float64Array(stride * (h + 1));
+    for (let y = 0; y < h; y++) {
+      let row = 0;
+      const base = (y + 1) * stride;
+      const prev = y * stride;
+      for (let x = 0; x < w; x++) {
+        row += data[y * w + x];
+        integral[base + x + 1] = integral[prev + x + 1] + row;
+      }
+    }
+    return { width: w, height: h, data, integral };
+  } finally {
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    gl.deleteTexture(gradTex);
+    gl.deleteTexture(nmsTex);
+    gl.deleteFramebuffer(fb);
+  }
 }
 
 export function gpuPixelate(
@@ -433,14 +623,6 @@ export function gpuPixelate(
       integralData[i * 4 + 3] = integral.a[i];
     }
 
-    const edges = useEdges
-      ? buildEdgeMap(src, {
-          sensitivity: Math.max(0, Math.min(1, settings.edgeThreshold)),
-          chroma: true,
-        })
-      : null;
-    const edgeData = edges ? new Float32Array(edges.integral) : new Float32Array([0]);
-
     gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
     gl.activeTexture(gl.TEXTURE0);
 
@@ -455,6 +637,21 @@ export function gpuPixelate(
       gl.NEAREST,
     );
     textures.push(srcTex);
+
+    const edges = useEdges
+      ? (() => {
+          try {
+            return buildGpuEdgeMap(gpu, srcTex, src, settings.edgeThreshold);
+          } catch (err) {
+            console.warn('PixelArtify: GPU edge map failed, using CPU.', err);
+            return buildEdgeMap(src, {
+              sensitivity: Math.max(0, Math.min(1, settings.edgeThreshold)),
+              chroma: true,
+            });
+          }
+        })()
+      : null;
+    const edgeData = edges ? new Float32Array(edges.integral) : new Float32Array([0]);
 
     const integralTex = makeTexture(
       gl,
