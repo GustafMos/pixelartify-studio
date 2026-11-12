@@ -1,4 +1,4 @@
-import type { PaletteDefinition, PipelineGraph, Preset } from '../core/types';
+import type { GraphNodeType, PaletteDefinition, PipelineGraph, Preset } from '../core/types';
 import { parsePreset } from '../core/presets';
 
 const PREFIX = 'pixelartify.studio.v1';
@@ -33,6 +33,16 @@ export function loadGraph(): PipelineGraph | null {
 
 export function saveGraph(graph: PipelineGraph): void {
   saveJSON('graph', graph);
+}
+
+export function loadRecentNodes(): GraphNodeType[] {
+  const raw = loadJSON<unknown[]>('recentNodes', []);
+  if (!Array.isArray(raw)) return [];
+  return raw.filter((v): v is GraphNodeType => typeof v === 'string').slice(0, 8);
+}
+
+export function saveRecentNodes(nodes: GraphNodeType[]): void {
+  saveJSON('recentNodes', nodes.slice(0, 8));
 }
 
 export function loadUserPresets(): Preset[] {

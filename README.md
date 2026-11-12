@@ -19,7 +19,7 @@ PixelArtify Studio turns drawings, photos and videos into deliberate pixel art. 
 ## Highlights
 
 - **Visual node graph** — multiple media inputs (folders or multi-selections), branching chains, merged batches and multiple output nodes. Drag a node over an existing wire to splice it into that connection automatically. Nodes whose current settings use a CPU-only bottleneck show an amber **!** with the reason in the inspector.
-- **GPU-accelerated sampler and dithering** — a WebGL2 backend runs the edge alignment search, offset smoothing, dominant-colour sampling, palette matching and matrix dithering in parallel, with automatic CPU fallback. Error-diffusion dithering is sequential and stays on the CPU. Expect roughly 2× faster previews on large images and smoother video playback.
+- **GPU-accelerated pipeline** — WebGL2 handles edge-aware sampling, nearest/bilinear resize, palette matching, matrix dithering, and single-pass grade/post effects (color correct, posterize, grain, scanlines, vignette, chromatic aberration, outline), with automatic CPU fallback. Error-diffusion dithering and blur/painterly effects remain on the CPU because they are sequential or multi-pass.
 - **Color Correct node** — exposure, contrast, brightness, saturation, gamma, hue, temperature and tint, with look presets. Alpha is preserved and several Color Correct nodes can be chained for an ordered grade.
 - **Split workspace** — a Blender-style viewer + node graph layout with a draggable divider, plus full Studio and Graph tabs.
 - **Edge-aware sampling** — the sampler searches for cell windows that avoid cutting through edges, then blends an area average with the dominant local colour. Inspired by [pixel-mosaic](https://github.com/yogthos/pixel-mosaic).
@@ -61,7 +61,7 @@ Open <http://localhost:5173>. Everything runs locally. Drop images or videos ont
 
 ```bash
 npm run build      # typecheck + production build
-npm run test       # 34 core tests
+npm run test       # 35 core tests
 npm run cli -- --help
 npm run build:cli  # bundle the headless CLI
 ```
@@ -78,7 +78,7 @@ The studio targets modern Chromium/Firefox/Safari. Video decoding/encoding uses 
 | --- | --- |
 | **Media input** | Folder / multi-selection of images and videos. Each asset flows through the graph independently. |
 | **Crop** | Normalized, percent or pixel crop. Alpha and masks are cropped with it. |
-| **Resize** | Nearest, bilinear, box, bicubic or Lanczos3. Retains premultiplied alpha. |
+| **Resize** | Nearest, bilinear, box, bicubic or Lanczos3. Accepts pixels, percent or a times (×) multiplier; nearest-neighbour is the default. Retains premultiplied alpha. |
 | **Channels** | Colour → channels: extract, swap, pack, luma→alpha, alpha→luma, HSL→RGB. |
 | **Color correct** | Exposure, contrast, brightness, saturation, gamma, hue, temperature and tint. Alpha is retained. |
 | **Pre-process** | Ordered effect stack applied at the canonical working resolution. |
@@ -94,13 +94,15 @@ The studio targets modern Chromium/Firefox/Safari. Video decoding/encoding uses 
 
 **Connecting:** drag from an output dot to anywhere on an input port row, or click an output then click an input. The **Connections** panel in the inspector is a keyboard-friendly fallback for adding and removing connections. Drag from an input to an output too — both directions work.
 
+**Adding after the selected node:** when a node is selected, adding a new one places it to the right and splices it into that node's outgoing connection. The same applies to **Shift+Space**, which opens a searchable command palette with recently used node types at the top. Use ↑/↓ and Enter to add; Esc closes.
+
 **Inserting:** drag a node by its title bar and drop it on a wire. The wire highlights green while the drop target is valid; releasing splices the node between the two existing nodes. Nodes with an incompatible port type, an occupied single input or a would-be cycle are left untouched.
 
 **Disconnecting:** hover a wire and click the red × cut button, use the Connections panel, or double-click the wire. Deleting a node automatically bridges its upstream and downstream connections; if the node has several upstream branches, a **Router** node is inserted so the tree stays intact.
 
 The **Split** tab shows the viewer and the node graph at the same time with a draggable divider. Mouse wheel zooms the graph; drag the background to pan. `G` cycles Studio → Split → Node graph.
 
-An amber **!** next to a node means its current settings contain CPU-only work that is likely to dominate preview or playback time. Hover the mark (or select the node) for the reason and a suggested faster alternative. Typical examples: error-diffusion dithering, automatic palette extraction, painterly/oil/watercolour effects, layer compositing/inpainting, Lanczos/Bicubic resize, and CPU fallback when WebGL2 is unavailable.
+An amber **!** next to a node means its current settings contain CPU-only work that is likely to dominate preview or playback time. Hover the mark (or select the node) for the reason and a suggested faster alternative. Typical examples: error-diffusion dithering, automatic palette extraction, painterly/oil/watercolour or blur-based effects, layer compositing/inpainting, box/Lanczos/Bicubic resize, bloom/CRT post effects, and CPU fallback when WebGL2 is unavailable.
 
 **Only nodes that are actually in the branch affect the image.** A graph with just a Media input wired to an Output is a lossless pass-through. Add Pixelate, Palette, Dither or effect nodes when you want them; the default look is never applied implicitly.
 
@@ -113,10 +115,12 @@ Video assets get a **play/pause** button next to the timeline. Playback uses a h
 The heaviest parts of the pipeline run on the GPU through WebGL2 when available:
 
 - **Pixelation** — per-cell edge-alignment search, offset smoothing and dominant-colour sampling.
+- **Resize** — nearest-neighbour and bilinear resampling run as a shader pass. Nearest is the default for pixel art.
 - **Dithering** — palette matching and every matrix-based algorithm (Bayer, blue noise, clustered dot, line, checker, dot, crosshatch, white noise, threshold) are evaluated per pixel in a shader. Error-diffusion algorithms (Floyd–Steinberg, Atkinson, …) are inherently sequential and stay on the CPU.
+- **Effects** — color correct, posterize, grain, scanlines, vignette, chromatic aberration and sprite outline have single-pass shader versions. Blur-based, painterly and inpainting effects remain on the CPU.
 - Typical end-to-end previews are about **2× faster** on large images (measured 326 → 156 ms at 405×270 art and 1.92 → 0.97 s at 1080×720 on a mid-range GPU).
-- GPU dithering matches the CPU exactly for ordered/pattern algorithms in flat-region tests; isolated palette ties differ by one palette entry on roughly 1–2% of pixels due to float precision.
-- Jobs under ~48k art pixels (sampling) or ~24k art pixels (dithering) stay on the CPU, where upload/readback would dominate. The viewer shows `GPU sampler` and `GPU dither` badges when each backend is active.
+- GPU dithering and effects match the CPU within 1–2 8-bit levels; flat-region dither patterns are exact. The viewer shows `GPU sampler`, `GPU dither` and `GPU effects` badges when each backend is active.
+- Jobs under ~48k art pixels (sampling), ~24k (dithering) or ~40k (effects) stay on the CPU, where upload/readback would dominate; small images are not slow, so this is intentional.
 - If WebGL2 is unavailable, the pipeline falls back to the CPU automatically.
 - During video playback the palette is resolved once and reused, and the working resolution is reduced; typical 480×270 art previews play at roughly 8 rendered fps on a laptop.
 

@@ -283,12 +283,33 @@ export function resizeNearest(src: PixelImage, width: number, height: number): P
 
 export type ResizeFilter = 'nearest' | 'bilinear' | 'box' | 'bicubic' | 'lanczos3';
 
+/** Optional accelerated resizer (WebGL2). Returns null to fall back to the CPU. */
+export type ImageResizer = (
+  src: PixelImage,
+  width: number,
+  height: number,
+  method: ResizeFilter,
+) => PixelImage | null;
+
+let globalResizer: ImageResizer | null = null;
+
+export function setGlobalResizer(resizer: ImageResizer | null): void {
+  globalResizer = resizer;
+}
+
 export function resizeImage(
   src: PixelImage,
   width: number,
   height: number,
   method: ResizeFilter = 'box',
 ): PixelImage {
+  if (width === src.width && height === src.height) {
+    const out = createImage(width, height);
+    out.data.set(src.data);
+    return out;
+  }
+  const accelerated = globalResizer?.(src, width, height, method);
+  if (accelerated) return accelerated;
   if (method === 'nearest') return resizeNearest(src, width, height);
   if (method === 'box') {
     const down = width < src.width || height < src.height;

@@ -17,7 +17,7 @@ const PREVIEW_H = 72;
 const PORT_DOT_INSET = 9;
 const PORT_ROW_CENTER = 11;
 
-const TYPE_ICON: Record<GraphNodeType, IconName> = {
+export const TYPE_ICON: Record<GraphNodeType, IconName> = {
   input: 'image',
   crop: 'fit',
   resize: 'zoomIn',
@@ -55,7 +55,12 @@ function summaryFor(node: GraphNode, assetCount: number): string {
     case 'resize': {
       const w = Number(p.width ?? 0);
       const h = Number(p.height ?? 0);
-      return `${w || 'auto'} × ${h || 'auto'} · ${String(p.filter ?? 'lanczos3')}`;
+      const unit = String(p.unit ?? 'pixels');
+      const filter = String(p.filter ?? 'nearest');
+      if (unit === 'times') {
+        return `${Number(p.factor ?? 2)}× · ${filter}`;
+      }
+      return `${w || 'auto'} × ${h || 'auto'} · ${filter}`;
     }
     case 'channels': {
       return `${String(p.operation ?? 'extract')} · ${String(p.channel ?? 'luma')}${p.keepAlpha ? ' · alpha' : ''}`;
@@ -535,15 +540,6 @@ export function GraphCanvas(): React.ReactElement {
     });
   };
 
-  const worldCenter = (): { x: number; y: number } => {
-    const el = viewportRef.current;
-    if (!el) return { x: 200, y: 200 };
-    return {
-      x: (el.clientWidth / 2 - view.x) / view.zoom - NODE_WIDTH / 2,
-      y: (el.clientHeight / 2 - view.y) / view.zoom - 60,
-    };
-  };
-
   const filteredTypes = useMemo(() => {
     const q = addSearch.trim().toLowerCase();
     return (Object.keys(NODE_DEFS) as GraphNodeType[]).filter((t) => {
@@ -603,8 +599,7 @@ export function GraphCanvas(): React.ReactElement {
                     type="button"
                     className="add-node-item"
                     onClick={() => {
-                      const c = worldCenter();
-                      addNode(type, c.x, c.y);
+                      addNode(type);
                       setAddOpen(false);
                       setAddSearch('');
                     }}
@@ -924,7 +919,7 @@ export function GraphCanvas(): React.ReactElement {
         <div className="graph-hint">
           <Icon name="graph" size={14} />
           Drag nodes · drop a node on a wire to insert it · drag an output to any input row (or click
-          output, then input) · wheel to zoom · hover a wire to cut it ·{' '}
+          output, then input) · wheel to zoom · hover a wire to cut it · Shift+Space node search ·{' '}
           <span className="hint-warning">!</span> marks CPU-bound nodes
           {mode === 'graph' ? ' · click nodes to preview that stage' : ''}
         </div>

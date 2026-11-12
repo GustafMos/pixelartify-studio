@@ -57,15 +57,19 @@ export function ResizePanel({ node }: { node: GraphNode }): React.ReactElement {
     width: number;
     height: number;
     unit: string;
+    factor?: number;
     mode: string;
     filter: string;
     allowUpscale: number;
   };
-  const unit = (p.unit ?? 'pixels') as 'pixels' | 'percent';
+  const unit = (p.unit ?? 'pixels') as 'pixels' | 'percent' | 'times';
   const sw = activeAsset?.width ?? 1;
   const sh = activeAsset?.height ?? 1;
-  const targetW = unit === 'percent' ? (p.width / 100) * sw : p.width;
-  const targetH = unit === 'percent' ? (p.height / 100) * sh : p.height;
+  const factor = Number(p.factor ?? 2);
+  const targetW =
+    unit === 'percent' ? (p.width / 100) * sw : unit === 'times' ? sw * factor : p.width;
+  const targetH =
+    unit === 'percent' ? (p.height / 100) * sh : unit === 'times' ? sh * factor : p.height;
   const set = (patch: Record<string, unknown>): void => updateNodeParams(node.id, patch);
 
   return (
@@ -77,29 +81,42 @@ export function ResizePanel({ node }: { node: GraphNode }): React.ReactElement {
           options={[
             { value: 'pixels', label: 'Pixels' },
             { value: 'percent', label: 'Percent' },
+            { value: 'times', label: 'Times (×)' },
           ]}
           onChange={(v) => set({ unit: v })}
         />
-        <div className="two-col">
+        {unit === 'times' ? (
           <NumberField
-            label="Width"
-            value={p.width ?? 0}
-            min={0}
-            step={1}
-            unit={unit === 'percent' ? '%' : 'px'}
-            hint="0 keeps the source aspect ratio"
-            onChange={(v) => set({ width: v })}
+            label="Scale"
+            value={factor}
+            min={0.05}
+            step={0.25}
+            unit="×"
+            hint="Multiplies the source dimensions. 2× doubles both width and height."
+            onChange={(v) => set({ factor: v })}
           />
-          <NumberField
-            label="Height"
-            value={p.height ?? 0}
-            min={0}
-            step={1}
-            unit={unit === 'percent' ? '%' : 'px'}
-            hint="0 keeps the source aspect ratio"
-            onChange={(v) => set({ height: v })}
-          />
-        </div>
+        ) : (
+          <div className="two-col">
+            <NumberField
+              label="Width"
+              value={p.width ?? 0}
+              min={0}
+              step={1}
+              unit={unit === 'percent' ? '%' : 'px'}
+              hint="0 keeps the source aspect ratio"
+              onChange={(v) => set({ width: v })}
+            />
+            <NumberField
+              label="Height"
+              value={p.height ?? 0}
+              min={0}
+              step={1}
+              unit={unit === 'percent' ? '%' : 'px'}
+              hint="0 keeps the source aspect ratio"
+              onChange={(v) => set({ height: v })}
+            />
+          </div>
+        )}
         <SelectField
           label="Fit mode"
           value={p.mode ?? 'fit'}
@@ -112,7 +129,7 @@ export function ResizePanel({ node }: { node: GraphNode }): React.ReactElement {
         />
         <SelectField
           label="Texture filter"
-          value={p.filter ?? 'lanczos3'}
+          value={p.filter ?? 'nearest'}
           options={[
             { value: 'nearest', label: 'Nearest (hard pixels)' },
             { value: 'bilinear', label: 'Bilinear' },
@@ -143,8 +160,8 @@ export function ResizePanel({ node }: { node: GraphNode }): React.ReactElement {
       <div className="info-callout">
         <Icon name="zoomIn" size={16} />
         <span>
-          Resize runs before pixelation. Use <strong>Lanczos 3</strong> for clean downscales and
-          <strong> Nearest</strong> when working with already-pixelated input.
+          Resize runs before pixelation. <strong>Nearest</strong> is the default for pixel art and keeps
+          hard edges; use <strong>Lanczos 3</strong> only for clean downscales of photographic input.
         </span>
       </div>
     </div>

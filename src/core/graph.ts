@@ -99,7 +99,7 @@ export const NODE_DEFS: Record<GraphNodeType, NodeDefinition> = {
     title: 'Resize',
     category: 'process',
     description:
-      'Resize with nearest, bilinear, box, bicubic or Lanczos3 filtering. Premultiplied alpha is retained.',
+      'Resize by pixels, percent or a times multiplier. Nearest-neighbour is the default; bilinear, box, bicubic and Lanczos3 are also available. Premultiplied alpha is retained.',
     accent: '#2ec4b6',
     inputs: [{ id: 'media', label: 'Media', type: 'media' }],
     outputs: [{ id: 'media', label: 'Media', type: 'media' }],
@@ -346,8 +346,9 @@ export function nodeParams(type: GraphNodeType, settings?: PixelArtifySettings):
         width: 0,
         height: 0,
         unit: 'pixels',
+        factor: 2,
         mode: 'fit',
-        filter: 'lanczos3',
+        filter: 'nearest',
         allowUpscale: 1,
       };
     case 'channels':
@@ -1016,6 +1017,10 @@ function resizeItem(item: GraphMediaItem, params: Record<string, unknown>): Grap
   if (unit === 'percent') {
     tw = (tw / 100) * sw;
     th = (th / 100) * sh;
+  } else if (unit === 'times') {
+    const factor = Math.max(0.01, Number(params.factor ?? params.width ?? 2));
+    tw = sw * factor;
+    th = sh * factor;
   }
   tw = Math.round(tw);
   th = Math.round(th);
@@ -1025,7 +1030,7 @@ function resizeItem(item: GraphMediaItem, params: Record<string, unknown>): Grap
   if (tw < 1 || th < 1) return item;
 
   const mode = String(params.mode ?? 'fit');
-  const filterRaw = String(params.filter ?? 'lanczos3');
+  const filterRaw = String(params.filter ?? 'nearest');
   const filter: ResizeFilter =
     filterRaw === 'nearest' || filterRaw === 'bilinear' || filterRaw === 'box' || filterRaw === 'bicubic'
       ? filterRaw

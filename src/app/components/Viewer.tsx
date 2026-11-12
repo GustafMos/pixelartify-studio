@@ -5,6 +5,7 @@ import { useStudio } from '../store';
 import { pixelImageToDataUrl } from '../io';
 import { GPU_MIN_PIXELS, gpuAvailable } from '../gpuPixelate';
 import { GPU_MIN_DITHER_PIXELS, gpuDitherAvailable, supportsGpuDither } from '../gpuFinish';
+import { GPU_MIN_EFFECT_PIXELS, gpuEffectsAvailable, supportsGpuEffects } from '../gpuEffects';
 import { Icon } from './icons';
 import { Badge, IconButton, Segmented, Slider, Spinner } from './controls';
 
@@ -69,6 +70,17 @@ export function Viewer({ resizeKey }: { resizeKey?: number | string } = {}): Rea
       activeItem &&
       artW * artH >= GPU_MIN_DITHER_PIXELS &&
       supportsGpuDither(activeItem.dither.algorithm),
+  );
+  const effectsSampler = useMemo(() => gpuEffectsAvailable(), []);
+  const effectsActive = Boolean(
+    effectsSampler &&
+      activeItem &&
+      artW * artH >= GPU_MIN_EFFECT_PIXELS &&
+      (supportsGpuEffects('preprocess', [
+        ...activeItem.preprocessOps,
+        ...activeItem.latePreprocessOps,
+      ]) ||
+        supportsGpuEffects('postprocess', activeItem.postprocess.ops)),
   );
 
   // Set up a hidden <video> used for smooth playback. The normal preview path
@@ -407,6 +419,7 @@ export function Viewer({ resizeKey }: { resizeKey?: number | string } = {}): Rea
             {gpuActive ? 'GPU sampler' : gpuSampler ? 'CPU sampler (small)' : 'CPU sampler'}
           </Badge>
           {ditherActive ? <Badge tone="success">GPU dither</Badge> : null}
+          {effectsActive ? <Badge tone="success">GPU effects</Badge> : null}
         </div>
         <div className="viewer-toolbar-right">
           <IconButton

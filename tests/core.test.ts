@@ -363,8 +363,35 @@ describe('nodes and graph', () => {
     expect(items[0].sourceWidth).toBe(100);
   });
 
-  it('passes input to output completely unaltered when no processing nodes exist', () => {
-    const graph: PipelineGraph = { id: 'g', name: 'g', description: '', nodes: [], edges: [] };
+  it('defaults resize to nearest and supports a times multiplier', () => {
+    const input = createNode('input', 0, 0);
+    const resize = createNode('resize', 200, 0);
+    const out = createNode('output', 400, 0);
+    expect(resize.params.filter).toBe('nearest');
+    resize.params = {
+      unit: 'times',
+      factor: 2,
+      mode: 'stretch',
+      filter: 'nearest',
+      allowUpscale: 1,
+    };
+    const graph: PipelineGraph = {
+      id: 'g',
+      name: 'g',
+      description: '',
+      nodes: [input, resize, out],
+      edges: [
+        { id: 'e1', fromNode: input.id, fromPort: 'media', toNode: resize.id, toPort: 'media' },
+        { id: 'e2', fromNode: resize.id, fromPort: 'media', toNode: out.id, toPort: 'media' },
+      ],
+    };
+    const evaluation = evaluateGraph(graph, { assetsByNode: { [input.id]: [asset] } });
+    const item = mediaAtPort(evaluation, out.id)[0];
+    expect(item.source.width).toBe(asset.width * 2);
+    expect(item.source.height).toBe(asset.height * 2);
+  });
+
+  it('passes input to output completely unaltered when no processing nodes exist', () => {    const graph: PipelineGraph = { id: 'g', name: 'g', description: '', nodes: [], edges: [] };
     const input = createNode('input', 0, 0);
     const out = createNode('output', 200, 0);
     graph.nodes.push(input, out);

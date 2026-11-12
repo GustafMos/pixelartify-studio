@@ -2,6 +2,8 @@ import type { GraphNode, PipelineGraph } from '../core/types';
 import { DITHER_BY_ID } from '../core/dither';
 import { gpuAvailable } from './gpuPixelate';
 import { gpuDitherAvailable, supportsGpuDither } from './gpuFinish';
+import { gpuResizeAvailable } from './gpuResize';
+import { gpuEffectsAvailable, supportsGpuEffects } from './gpuEffects';
 
 export interface CpuWarning {
   /** Short label used in badges. */
@@ -10,14 +12,26 @@ export interface CpuWarning {
   detail: string;
 }
 
-const HEAVY_PREPROCESS = new Set(['painterly', 'oil', 'watercolor', 'displace', 'bloom']);
-const HEAVY_POSTPROCESS = new Set(['bloom', 'crt']);
+const HEAVY_PREPROCESS = new Set([
+  'painterly',
+  'oil',
+  'watercolor',
+  'displace',
+  'soften',
+  'sharpen',
+  'bloom',
+  'pixelBlur',
+]);
+const HEAVY_POSTPROCESS = new Set(['bloom', 'crt', 'sharpen']);
 
 const EFFECT_LABELS: Record<string, string> = {
   painterly: 'Painterly (Kuwahara)',
   oil: 'Oil paint',
   watercolor: 'Watercolour',
   displace: 'Noise displacement',
+  soften: 'Soften',
+  sharpen: 'Sharpen',
+  pixelBlur: 'Chunky blur',
   bloom: 'Bloom',
   crt: 'CRT',
 };
@@ -95,14 +109,18 @@ export function nodeCpuWarning(node: GraphNode, graph: PipelineGraph): CpuWarnin
     }
 
     case 'resize': {
-      const filter = String(node.params.filter ?? 'lanczos3');
-      if (filter === 'lanczos3' || filter === 'bicubic') {
+      const filter = String(node.params.filter ?? 'nearest');
+      if ((filter === 'nearest' || filter === 'bilinear') && gpuResizeAvailable()) return null;
+      if (filter === 'nearest' || filter === 'bilinear') {
         return {
           title: 'CPU resize',
-          detail: `${filter === 'lanczos3' ? 'Lanczos3' : 'Bicubic'} resampling runs on the CPU. Box or bilinear is much cheaper for large sources.`,
+          detail: 'WebGL2 is unavailable, so this resize runs on the CPU.',
         };
       }
-      return null;
+      return {
+        title: 'CPU resize',
+        detail: `${filter === 'lanczos3' ? 'Lanczos3' : filter === 'bicubic' ? 'Bicubic' : 'Box'} resampling runs on the CPU. Nearest-neighbour uses the GPU resize path and is much cheaper.`,
+      };
     }
 
     case 'preprocess': {
@@ -140,7 +158,7 @@ export function nodeCpuWarning(node: GraphNode, graph: PipelineGraph): CpuWarnin
         title: 'CPU post effects',
         detail: `${opNames(heavy)} run${
           heavy.length === 1 ? 's' : ''
-        } on the CPU at the art resolution. Bloom/CRT are the most expensive post effects.`,
+        } on the CPU at the art resolution. Bloom, CRT and final sharpen are the most expensive post effects.`,
       };
     }
 

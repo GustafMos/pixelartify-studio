@@ -337,6 +337,28 @@ export interface EffectContext {
   seed?: number;
 }
 
+/** Subset shared by pre/post operations that a GPU backend can consume. */
+export interface AcceleratedEffectOp {
+  type?: string;
+  enabled?: boolean;
+  params?: Record<string, number>;
+  color?: string;
+}
+
+/** Optional WebGL2 effect backend. Return null to fall back to the CPU path. */
+export type EffectAccelerator = (
+  stage: 'preprocess' | 'postprocess',
+  image: PixelImage,
+  ops: AcceleratedEffectOp[],
+  ctx: EffectContext,
+) => PixelImage | null;
+
+let globalEffectAccelerator: EffectAccelerator | null = null;
+
+export function setGlobalEffectAccelerator(accelerator: EffectAccelerator | null): void {
+  globalEffectAccelerator = accelerator;
+}
+
 const scaleOf = (img: PixelImage, ctx: EffectContext): number =>
   Math.max(0.05, img.width / Math.max(1, ctx.artWidth));
 
@@ -345,6 +367,8 @@ export function applyPreprocess(
   ops: PreprocessOp[],
   ctx: EffectContext,
 ): PixelImage {
+  const accelerated = globalEffectAccelerator?.('preprocess', input, ops, ctx);
+  if (accelerated) return accelerated;
   let img = input;
   for (const op of ops) {
     if (!op.enabled) continue;
@@ -795,6 +819,8 @@ export function applyPostprocess(
   ops: PostprocessOp[],
   ctx: EffectContext,
 ): PixelImage {
+  const accelerated = globalEffectAccelerator?.('postprocess', input, ops, ctx);
+  if (accelerated) return accelerated;
   let img = input;
   for (const op of ops) {
     if (!op.enabled) continue;

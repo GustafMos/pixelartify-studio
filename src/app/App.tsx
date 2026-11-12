@@ -7,6 +7,7 @@ import { Inspector } from './components/Inspector';
 import { Viewer } from './components/Viewer';
 import { SplitView } from './components/SplitView';
 import { PaletteStudio } from './components/PaletteStudio';
+import { NodeSearch } from './components/NodeSearch';
 import { Toasts } from './components/Toasts';
 import { Icon } from './components/icons';
 import { Badge } from './components/controls';
@@ -135,6 +136,7 @@ export function App(): React.ReactElement {
       </footer>
 
       <PaletteStudio />
+      <NodeSearch />
       <Toasts />
     </div>
   );

@@ -44,7 +44,7 @@ import {
   type GraphAsset,
   type GraphMediaItem,
 } from '../core/graph';
-import { loadGraph, saveGraph, loadUserPresets, saveUserPresets, loadUserPalettes, saveUserPalettes, loadActivePaletteId, saveActivePaletteId, loadUiMode, saveUiMode } from './storage';
+import { loadGraph, saveGraph, loadUserPresets, saveUserPresets, loadUserPalettes, saveUserPalettes, loadActivePaletteId, saveActivePaletteId, loadUiMode, saveUiMode, loadRecentNodes, saveRecentNodes } from './storage';
 import {
   decodeImageFile,
   downloadText,
@@ -106,6 +106,7 @@ interface StudioContextValue {
   graphErrors: ReturnType<typeof validateGraph>;
   presets: Preset[];
   userPresets: Preset[];
+  recentNodeTypes: GraphNodeType[];
   palettes: PaletteDefinition[];
   userPalettes: PaletteDefinition[];
   activePaletteId: string | null;
@@ -194,6 +195,7 @@ export function StudioProvider({ children }: { children: React.ReactNode }): Rea
   const [isImporting, setIsImporting] = useState(false);
   const [previewFullQuality, setPreviewFullQuality] = useState(false);
   const [userPresets, setUserPresets] = useState<Preset[]>(() => loadUserPresets());
+  const [recentNodeTypes, setRecentNodeTypes] = useState<GraphNodeType[]>(() => loadRecentNodes());
   const [userPalettes, setUserPalettes] = useState<PaletteDefinition[]>(() => loadUserPalettes());
   const [activePaletteId, setActivePaletteIdState] = useState<string | null>(() => loadActivePaletteId());
   const [maskOverrides, setMaskOverrides] = useState<Record<string, MaskData>>({});
@@ -402,6 +404,9 @@ export function StudioProvider({ children }: { children: React.ReactNode }): Rea
     saveUserPresets(userPresets);
   }, [userPresets]);
   useEffect(() => {
+    saveRecentNodes(recentNodeTypes);
+  }, [recentNodeTypes]);
+  useEffect(() => {
     saveUserPalettes(userPalettes);
   }, [userPalettes]);
   useEffect(() => {
@@ -468,36 +473,102 @@ export function StudioProvider({ children }: { children: React.ReactNode }): Rea
 
   const addNode = useCallback((type: GraphNodeType, x?: number, y?: number): string => {
     const settings = settingsFromGraph(graph);
+    const def = NODE_DEFS[type];
+    const anchor = selectedNode ?? null;
     let px = x;
     let py = y;
-    let connectFrom: GraphNode | null = null;
-    if (px === undefined || py === undefined) {
-      const anchor = selectedNode ?? graph.nodes[0];
-      if (anchor) {
-        px = anchor.x + 260;
-        py = anchor.y;
-        const out = NODE_DEFS[anchor.type].outputs.find((p) => p.type === 'media');
-        const inp = NODE_DEFS[type].inputs.find((p) => p.type === 'media');
-        if (out && inp) connectFrom = anchor;
-      } else {
-        px = 80;
-        py = 200;
+    let splice: {
+      edgeId: string;
+      fromPort: string;
+      toNode: string;
+      toPort: string;
+      inPort: string;
+      outPort: string;
+    } | null = null;
+    let connect: { fromNode: string; fromPort: string; toPort: string } | null = null;
+
+    if (anchor) {
+      px = anchor.x + 260;
+      py = anchor.y;
+      const outPort = NODE_DEFS[anchor.type].outputs.find((output) =>
+        def.inputs.some((input) => input.type === output.type),
+      );
+      if (outPort) {
+        const inPort = def.inputs.find((input) => input.type === outPort.type);
+        const newOutPort = def.outputs.find((output) => output.type === outPort.type);
+        if (inPort && newOutPort) {
+          // Prefer splicing the new node into the selected node's outgoing wire.
+          const candidate = graph.edges.find((edge) => {
+            if (edge.fromNode !== anchor.id || edge.fromPort !== outPort.id) return false;
+            const target = graph.nodes.find((n) => n.id === edge.toNode);
+            if (!target) return false;
+            return NODE_DEFS[target.type].inputs.some(
+              (input) => input.id === edge.toPort && input.type === newOutPort.type,
+            );
+          });
+          if (candidate) {
+            const target = graph.nodes.find((n) => n.id === candidate.toNode);
+            splice = {
+              edgeId: candidate.id,
+              fromPort: candidate.fromPort,
+              toNode: candidate.toNode,
+              toPort: candidate.toPort,
+              inPort: inPort.id,
+              outPort: newOutPort.id,
+            };
+            if (target) {
+              const gap = target.x - anchor.x;
+              px = gap > 520 ? anchor.x + Math.round(gap / 2) - 106 : anchor.x + 260;
+              py = Math.round((anchor.y + target.y) / 2);
+            }
+          } else {
+            connect = { fromNode: anchor.id, fromPort: outPort.id, toPort: inPort.id };
+          }
+        }
       }
+    } else if (px === undefined || py === undefined) {
+      px = 80;
+      py = 200;
     }
-    const node = createNode(type, px, py, nodeParams(type, settings), settings);
+
+    const node = createNode(type, px ?? 80, py ?? 200, nodeParams(type, settings), settings);
     mutateGraph((g) => {
       let next: PipelineGraph = { ...g, nodes: [...g.nodes, node] };
-      if (connectFrom) {
+      if (splice) {
+        const target = g.nodes.find((n) => n.id === splice!.toNode);
+        if (target) {
+          next = {
+            ...next,
+            edges: [
+              ...g.edges.filter((edge) => edge.id !== splice!.edgeId),
+              {
+                id: uid('edge'),
+                fromNode: anchor!.id,
+                fromPort: splice!.fromPort,
+                toNode: node.id,
+                toPort: splice!.inPort,
+              },
+              {
+                id: uid('edge'),
+                fromNode: node.id,
+                fromPort: splice!.outPort,
+                toNode: target.id,
+                toPort: splice!.toPort,
+              },
+            ],
+          };
+        }
+      } else if (connect) {
         next = {
           ...next,
           edges: [
             ...next.edges,
             {
               id: uid('edge'),
-              fromNode: connectFrom.id,
-              fromPort: 'media',
+              fromNode: connect!.fromNode,
+              fromPort: connect!.fromPort,
               toNode: node.id,
-              toPort: 'media',
+              toPort: connect!.toPort,
             },
           ],
         };
@@ -505,6 +576,7 @@ export function StudioProvider({ children }: { children: React.ReactNode }): Rea
       return next;
     });
     setSelectedNodeId(node.id);
+    setRecentNodeTypes((prev) => [type, ...prev.filter((t) => t !== type)].slice(0, 8));
     return node.id;
   }, [graph, mutateGraph, selectedNode]);
 
@@ -1078,6 +1150,7 @@ export function StudioProvider({ children }: { children: React.ReactNode }): Rea
     graphErrors,
     presets,
     userPresets,
+    recentNodeTypes,
     palettes,
     userPalettes,
     activePaletteId: activePalette?.id ?? null,
