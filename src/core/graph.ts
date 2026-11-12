@@ -45,6 +45,7 @@ import { DEFAULT_RESOLUTION, computeArtSize } from './resolution';
 import { extractMask } from './extraction';
 import {
   cloneImage,
+  compositeOver,
   cropImage,
   cropMaskNormalized,
   multiplyAlpha,
@@ -54,6 +55,8 @@ import {
 } from './image';
 import { DEFAULT_CHANNELS, applyChannels, type ChannelSettings } from './channels';
 import { DEFAULT_COLOR_CORRECTION } from './preprocess';
+import { DEFAULT_BACKGROUND, renderBackground, type BackgroundParams } from './background';
+import { DEFAULT_OBJECT3D, renderObject3D, type Render3DParams } from './render3d';
 
 export type SocketType = 'media' | 'mask' | 'palette';
 
@@ -198,6 +201,26 @@ export const NODE_DEFS: Record<GraphNodeType, NodeDefinition> = {
     ],
     outputs: [{ id: 'media', label: 'Media', type: 'media' }],
   },
+  background: {
+    type: 'background',
+    title: 'Background',
+    category: 'source',
+    description:
+      'Generate a solid colour, gradient or pattern. Connect media to place it behind an image or video; leave unconnected to output the background on its own.',
+    accent: '#4d96ff',
+    inputs: [{ id: 'media', label: 'Media', type: 'media', optional: true }],
+    outputs: [{ id: 'media', label: 'Media', type: 'media' }],
+  },
+  object3d: {
+    type: 'object3d',
+    title: '3D object',
+    category: 'source',
+    description:
+      'Render a cube, sphere, cylinder, cone, torus or pyramid with an orthographic camera. Rotate, move and light it; connect media to composite the object on top.',
+    accent: '#f8961e',
+    inputs: [{ id: 'media', label: 'Media', type: 'media', optional: true }],
+    outputs: [{ id: 'media', label: 'Media', type: 'media' }],
+  },
   postprocess: {
     type: 'postprocess',
     title: 'Post-process',
@@ -281,6 +304,10 @@ export interface GraphMediaItem {
   preprocessOps: PreprocessOp[];
   latePreprocessOps: PreprocessOp[];
   postprocess: PostprocessSettings;
+  /** Generated backdrop applied behind live video frames. */
+  underlay?: PixelImage;
+  /** Generated overlay (for example a 3D object) applied on top of frames. */
+  overlay?: PixelImage;
   resolution: ResolutionSettings;
   pixelate: PixelateSettings;
   /** True only if a Pixelate node is present in this branch. */
@@ -377,6 +404,10 @@ export function nodeParams(type: GraphNodeType, settings?: PixelArtifySettings):
       };
     case 'compose':
       return { layers: deepClone(s.layers.length > 0 ? s.layers : threeLayerStack()) };
+    case 'background':
+      return { ...deepClone(DEFAULT_BACKGROUND) };
+    case 'object3d':
+      return { ...deepClone(DEFAULT_OBJECT3D) };
     case 'postprocess':
       return { postprocess: deepClone(s.postprocess) };
     case 'merge':
@@ -899,6 +930,63 @@ function evaluateNode(
         },
       };
     }
+    case 'background': {
+      const params: BackgroundParams = {
+        ...deepClone(DEFAULT_BACKGROUND),
+        ...(node.params as Partial<BackgroundParams>),
+      };
+      if (!media) {
+        const image = renderBackground(params.width, params.height, params);
+        return {
+          media: { type: 'media', items: [makeGeneratedItem(node, image, 'Background')] },
+        };
+      }
+      return {
+        media: {
+          type: 'media',
+          items: media.items.map((item) => {
+            const backdrop = renderBackground(item.sourceWidth, item.sourceHeight, params);
+            const underlay = item.underlay ? compositeOver(backdrop, item.underlay) : backdrop;
+            return {
+              ...item,
+              source: compositeOver(backdrop, item.source),
+              underlay,
+            };
+          }),
+        },
+      };
+    }
+    case 'object3d': {
+      const params: Render3DParams = {
+        ...deepClone(DEFAULT_OBJECT3D),
+        ...(node.params as Partial<Render3DParams>),
+      };
+      if (!media) {
+        const image = renderObject3D(params.width, params.height, params);
+        return {
+          media: { type: 'media', items: [makeGeneratedItem(node, image, '3D object')] },
+        };
+      }
+      return {
+        media: {
+          type: 'media',
+          items: media.items.map((item) => {
+            // With an input the object is an overlay, so a solid background
+            // would hide the source. The Background node handles backdrops.
+            const object = renderObject3D(item.sourceWidth, item.sourceHeight, {
+              ...params,
+              background: 'transparent',
+            });
+            const overlay = item.overlay ? compositeOver(item.overlay, object) : object;
+            return {
+              ...item,
+              source: compositeOver(item.source, object),
+              overlay,
+            };
+          }),
+        },
+      };
+    }
     case 'postprocess': {
       if (!media) return null;
       const post = (node.params.postprocess as PostprocessSettings) ?? { ops: [], lockPalette: false };
@@ -1007,19 +1095,24 @@ export function applyTrackedAlphaCuts(
   tracked: Record<string, TrackedMaskSequence> | undefined,
 ): PixelImage {
   const keys = item.alphaCutKeys ?? [];
-  if (keys.length === 0) return applyItemAlphaCuts(item, image);
-  const out = cloneImage(image);
-  for (const key of keys) {
-    const maskId = key.split(':')[2] ?? '';
-    const seq = tracked?.[key];
-    let mask: MaskData | undefined;
-    if (seq && seq.masks.length > 0) {
-      const index = Math.max(0, Math.min(seq.masks.length - 1, Math.round(time * seq.fps)));
-      mask = seq.masks[index];
+  let out = keys.length === 0 ? applyItemAlphaCuts(item, image) : cloneImage(image);
+  if (keys.length > 0) {
+    for (const key of keys) {
+      const maskId = key.split(':')[2] ?? '';
+      const seq = tracked?.[key];
+      let mask: MaskData | undefined;
+      if (seq && seq.masks.length > 0) {
+        const index = Math.max(0, Math.min(seq.masks.length - 1, Math.round(time * seq.fps)));
+        mask = seq.masks[index];
+      }
+      if (!mask) mask = item.masks[maskId];
+      if (mask) multiplyAlpha(out, mask);
     }
-    if (!mask) mask = item.masks[maskId];
-    if (mask) multiplyAlpha(out, mask);
   }
+  // Generated scene layers are static, so they are baked into `item.source`
+  // for stills. Live video frames arrive separately and need them reapplied.
+  if (item.underlay) out = compositeOver(item.underlay, out);
+  if (item.overlay) out = compositeOver(out, item.overlay);
   return out;
 }
 
@@ -1071,6 +1164,8 @@ function cropItem(item: GraphMediaItem, params: Record<string, unknown>): GraphM
     sourceWidth: b.width,
     sourceHeight: b.height,
     masks,
+    underlay: item.underlay ? cropImage(item.underlay, b.x, b.y, b.width, b.height) : undefined,
+    overlay: item.overlay ? cropImage(item.overlay, b.x, b.y, b.width, b.height) : undefined,
   };
 }
 
@@ -1123,11 +1218,13 @@ function resizeItem(item: GraphMediaItem, params: Record<string, unknown>): Grap
 
   let finalW = rw;
   let finalH = rh;
+  let ox = 0;
+  let oy = 0;
   if (mode === 'fill') {
     finalW = Math.min(tw, rw);
     finalH = Math.min(th, rh);
-    const ox = Math.max(0, Math.round((rw - finalW) / 2));
-    const oy = Math.max(0, Math.round((rh - finalH) / 2));
+    ox = Math.max(0, Math.round((rw - finalW) / 2));
+    oy = Math.max(0, Math.round((rh - finalH) / 2));
     source = cropImage(source, ox, oy, finalW, finalH);
     for (const [id, mask] of Object.entries(masks)) {
       masks[id] = cropMaskNormalized(
@@ -1146,6 +1243,56 @@ function resizeItem(item: GraphMediaItem, params: Record<string, unknown>): Grap
     sourceWidth: finalW,
     sourceHeight: finalH,
     masks,
+    underlay: item.underlay
+      ? cropImage(resizeImage(item.underlay, rw, rh, filter), ox, oy, finalW, finalH)
+      : undefined,
+    overlay: item.overlay
+      ? cropImage(resizeImage(item.overlay, rw, rh, filter), ox, oy, finalW, finalH)
+      : undefined,
+  };
+}
+
+function hashParams(value: unknown): string {
+  const text = JSON.stringify(value ?? null);
+  let hash = 2166136261;
+  for (let i = 0; i < text.length; i++) {
+    hash ^= text.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0).toString(36);
+}
+
+/** Wrap an image produced by a generator node (background, 3D object). */
+function makeGeneratedItem(node: GraphNode, image: PixelImage, name: string): GraphMediaItem {
+  const s = defaultSettings();
+  const version = hashParams(node.params);
+  const assetId = `generated:${node.id}:${version}`;
+  return {
+    key: `${node.id}:${version}`,
+    name,
+    assetId,
+    kind: 'image',
+    source: image,
+    sourceWidth: image.width,
+    sourceHeight: image.height,
+    masks: {},
+    alphaCutMaskIds: [],
+    alphaCutKeys: [],
+    layers: [],
+    preprocessOps: [],
+    latePreprocessOps: [],
+    postprocess: { ops: [], lockPalette: false },
+    resolution: deepClone(s.resolution),
+    pixelate: deepClone(s.pixelate),
+    pixelateEnabled: false,
+    paletteEnabled: false,
+    ditherEnabled: false,
+    palette: deepClone(s.palette),
+    dither: deepClone(s.dither),
+    output: deepClone(s.output),
+    video: deepClone(s.video),
+    extraction: deepClone(s.extraction),
+    stage: 'source',
   };
 }
 
@@ -1236,6 +1383,8 @@ export function settingsFromItem(item: GraphMediaItem): PixelArtifySettings {
 export function stopStageForNode(type: GraphNodeType): 'source' | 'preprocess' | 'pixelate' | 'dither' | 'post' {
   switch (type) {
     case 'input':
+    case 'background':
+    case 'object3d':
       return 'source';
     case 'preprocess':
     case 'color':

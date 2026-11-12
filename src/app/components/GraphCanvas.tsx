@@ -29,6 +29,8 @@ export const TYPE_ICON: Record<GraphNodeType, IconName> = {
   dither: 'sparkles',
   extract: 'eye',
   compose: 'layers',
+  background: 'background',
+  object3d: 'cube',
   postprocess: 'settings',
   merge: 'link',
   router: 'link',
@@ -99,6 +101,15 @@ function summaryFor(node: GraphNode, assetCount: number): string {
     case 'compose': {
       const layers = Array.isArray(p.layers) ? p.layers : [];
       return `${layers.length} layer${layers.length === 1 ? '' : 's'}`;
+    }
+    case 'background': {
+      const mode = String(p.mode ?? 'linear');
+      return mode === 'solid' || mode === 'transparent'
+        ? mode
+        : `${mode} · ${Number(p.scale ?? 32)}px`;
+    }
+    case 'object3d': {
+      return `${String(p.primitive ?? 'cube')} · ${Number(p.rotationY ?? 0)}°`;
     }
     case 'postprocess': {
       const post = p.postprocess as { ops?: unknown[] } | undefined;

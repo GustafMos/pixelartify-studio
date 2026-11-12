@@ -40,7 +40,9 @@ type IconName =
   | 'eraser'
   | 'refresh'
   | 'save'
-  | 'folderOpen';
+  | 'folderOpen'
+  | 'background'
+  | 'cube';
 
 const PATHS: Record<IconName, React.ReactNode> = {
   image: (
@@ -190,6 +192,19 @@ const PATHS: Record<IconName, React.ReactNode> = {
     <>
       <path d="M5 3h11l3 3v15H5z" />
       <path d="M8 3v6h8V3M8 21v-7h8v7" />
+    </>
+  ),
+  background: (
+    <>
+      <rect x="3" y="3" width="18" height="18" rx="2" />
+      <path d="M3 15c4-4 8 4 12 0s5-3 6-2" />
+      <circle cx="8" cy="8" r="1.5" />
+    </>
+  ),
+  cube: (
+    <>
+      <path d="M12 3 21 8v8l-9 5-9-5V8z" />
+      <path d="m3 8 9 5 9-5M12 13v8" />
     </>
   ),
 };

@@ -315,6 +315,8 @@ export type GraphNodeType =
   | 'dither'
   | 'extract'
   | 'compose'
+  | 'background'
+  | 'object3d'
   | 'postprocess'
   | 'merge'
   | 'router'

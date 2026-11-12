@@ -61,7 +61,7 @@ Open <http://localhost:5173>. Everything runs locally. Drop images or videos ont
 
 ```bash
 npm run build      # typecheck + production build
-npm run test       # 39 core tests
+npm run test       # 42 core tests
 npm run cli -- --help
 npm run build:cli  # bundle the headless CLI
 ```
@@ -87,6 +87,8 @@ The studio targets modern Chromium/Firefox/Safari. Video decoding/encoding uses 
 | **Dither** | Algorithm, strength, pattern scale, colour space, serpentine scan, threshold and seed. |
 | **Feature extract** | Saliency, subject box/ellipse, chroma, luma, edge or manual mask. Outputs a mask bundle. **Magic select** paints positive/negative strokes and grows a subject mask; on video, **Apply & track** follows and caches per-frame masks. Enable **Only extracted** to multiply the media output by the mask. |
 | **Compose layers** | Layer stack with visibility, opacity, blend, offsets, scaling, detail high-pass, masks, occlusion masks and inpainting settings. |
+| **Background** | Generated solid colour, linear/radial gradient, checkerboard, stripes, grid, dots or noise. Connect media to place it behind the image; leave unconnected for a standalone background. |
+| **3D object** | Cube, sphere, cylinder, cone, torus or pyramid with an orthographic camera. Rotate on X/Y/Z, move on X/Y/Z, scale, zoom and light it. Connect media to composite the object on top; the generated background option applies when standalone. |
 | **Post-process** | Outline, bloom, grain, scanlines, vignette, chromatic aberration, CRT, sharpen. |
 | **Merge** | Concatenate multiple media bundles into one batch. |
 | **Router** | Pure pass-through reroute for media, masks and palettes. Keeps branches intact when replacing or deleting a node. |

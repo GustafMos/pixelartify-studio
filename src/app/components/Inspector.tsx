@@ -14,6 +14,7 @@ import { DitherPanel } from './inspectors/DitherPanel';
 import { ExtractPanel, ComposePanel } from './inspectors/LayerPanels';
 import { PreprocessPanel, PostprocessPanel } from './inspectors/EffectPanels';
 import { OutputPanel } from './inspectors/OutputPanel';
+import { BackgroundPanel, Object3DPanel } from './inspectors/ScenePanels';
 import { ConnectionsPanel } from './ConnectionsPanel';
 
 export function Inspector(): React.ReactElement {
@@ -130,6 +131,10 @@ function renderPanel(node: GraphNode): React.ReactElement {
       return <ExtractPanel node={node} />;
     case 'compose':
       return <ComposePanel node={node} />;
+    case 'background':
+      return <BackgroundPanel node={node} />;
+    case 'object3d':
+      return <Object3DPanel node={node} />;
     case 'preprocess':
       return <PreprocessPanel node={node} />;
     case 'postprocess':
@@ -243,6 +248,8 @@ function nodeIcon(type: GraphNode['type']): Parameters<typeof Icon>[0]['name'] {
     dither: 'sparkles',
     extract: 'eye',
     compose: 'layers',
+    background: 'background',
+    object3d: 'cube',
     postprocess: 'settings',
     merge: 'link',
     router: 'link',

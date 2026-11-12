@@ -997,6 +997,47 @@ export function blendPixel(
   }
 }
 
+/**
+ * Source-over compositing for two full-size RGBA images. The top image is
+ * placed at (dx, dy); pixels outside either image are left untouched. This is
+ * used by the generated background and 3D object nodes.
+ */
+export function compositeOver(
+  base: PixelImage,
+  top: PixelImage,
+  dx = 0,
+  dy = 0,
+): PixelImage {
+  const out = cloneImage(base);
+  const x0 = Math.max(0, dx);
+  const y0 = Math.max(0, dy);
+  const x1 = Math.min(out.width, dx + top.width);
+  const y1 = Math.min(out.height, dy + top.height);
+  for (let y = y0; y < y1; y++) {
+    const ty = y - dy;
+    for (let x = x0; x < x1; x++) {
+      const ti = (ty * top.width + (x - dx)) * 4;
+      const ta = top.data[ti + 3] / 255;
+      if (ta <= 0) continue;
+      const di = (y * out.width + x) * 4;
+      const da = out.data[di + 3] / 255;
+      const oa = ta + da * (1 - ta);
+      if (oa <= 0) {
+        out.data[di] = 0;
+        out.data[di + 1] = 0;
+        out.data[di + 2] = 0;
+        out.data[di + 3] = 0;
+        continue;
+      }
+      for (let c = 0; c < 3; c++) {
+        out.data[di + c] = (top.data[ti + c] * ta + out.data[di + c] * da * (1 - ta)) / oa;
+      }
+      out.data[di + 3] = oa * 255;
+    }
+  }
+  return out;
+}
+
 export interface CompositeLayer {
   image: PixelImage;
   opacity: number;

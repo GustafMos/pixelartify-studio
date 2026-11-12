@@ -509,6 +509,10 @@ export function StudioProvider({ children }: { children: React.ReactNode }): Rea
     if (anchor) {
       px = anchor.x + 260;
       py = anchor.y;
+      // Generators added after an Output are usually meant to start a new
+      // scene, not to consume the output's (often empty) passthrough.
+      const startsScene =
+        (type === 'background' || type === 'object3d') && anchor.type === 'output';
       let firstCompatible: { fromPort: string; inPort: string } | null = null;
       for (const outPort of NODE_DEFS[anchor.type].outputs) {
         const inPort = def.inputs.find((input) => input.type === outPort.type);
@@ -548,7 +552,7 @@ export function StudioProvider({ children }: { children: React.ReactNode }): Rea
           px = Math.max(anchor.x + 260, Math.round(avgX) - 106);
           py = Math.round(avgY);
         }
-      } else if (firstCompatible) {
+      } else if (firstCompatible && !startsScene) {
         connect = {
           fromNode: anchor.id,
           fromPort: firstCompatible.fromPort,
@@ -611,6 +615,9 @@ export function StudioProvider({ children }: { children: React.ReactNode }): Rea
       return next;
     });
     setSelectedNodeId(node.id);
+    // Adding an Output should preview that output instead of leaving the
+    // previous output selected.
+    if (type === 'output') setSelectedOutputId(node.id);
     setRecentNodeTypes((prev) => [type, ...prev.filter((t) => t !== type)].slice(0, 8));
     return node.id;
   }, [graph, mutateGraph, selectedNode]);

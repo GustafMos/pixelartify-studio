@@ -23,6 +23,9 @@ import {
   parsePalette,
   renderPrintPage,
   parsePreset,
+  PRIMITIVES_3D,
+  renderBackground,
+  renderObject3D,
   renderPixelArt,
   serializePalette,
   serializePreset,
@@ -33,9 +36,11 @@ import {
   upscaleNearest,
 } from '../src/core';
 import {
+  connect,
   createDefaultGraph,
   createNode,
   applyItemAlphaCuts,
+  applyTrackedAlphaCuts,
   deleteNodePreservingGraph,
   evaluateGraph,
   mediaAtPort,
@@ -777,6 +782,103 @@ describe('upscale', () => {
     expect(pixel(up, 0, 0)).toEqual([10, 20, 30, 255]);
     expect(pixel(up, 2, 0)).toEqual([10, 20, 30, 255]);
     expect(pixel(up, 3, 0)).toEqual([40, 50, 60, 128]);
+  });
+});
+
+describe('generated backgrounds and 3D primitives', () => {
+  it('renders solid, gradient, checker and transparent backgrounds', () => {
+    const solid = renderBackground(24, 16, { mode: 'solid', colorA: '#112233', colorB: '#ffffff' });
+    expect(pixel(solid, 0, 0)).toEqual([17, 34, 51, 255]);
+    expect(pixel(solid, 23, 15)).toEqual([17, 34, 51, 255]);
+
+    const linear = renderBackground(32, 8, {
+      mode: 'linear',
+      colorA: '#000000',
+      colorB: '#ffffff',
+      angle: 0,
+    });
+    const left = pixel(linear, 0, 4)[0];
+    const right = pixel(linear, 31, 4)[0];
+    expect(right).toBeGreaterThan(left + 100);
+
+    const checker = renderBackground(32, 32, {
+      mode: 'checker',
+      colorA: '#ff0000',
+      colorB: '#0000ff',
+      scale: 8,
+    });
+    expect(pixel(checker, 2, 2)).toEqual([255, 0, 0, 255]);
+    expect(pixel(checker, 10, 2)).toEqual([0, 0, 255, 255]);
+    expect(pixel(checker, 10, 10)).toEqual([255, 0, 0, 255]);
+
+    const transparent = renderBackground(8, 8, { mode: 'transparent' });
+    expect(transparent.data.every((value) => value === 0)).toBe(true);
+  });
+
+  it('renders every primitive with visible pixels', () => {
+    for (const { value } of PRIMITIVES_3D) {
+      const image = renderObject3D(96, 96, { primitive: value, antiAlias: 0 });
+      expect(image.width).toBe(96);
+      let opaque = 0;
+      for (let i = 3; i < image.data.length; i += 4) if (image.data[i] > 0) opaque++;
+      expect(opaque, value).toBeGreaterThan(400);
+      expect(opaque, value).toBeLessThan(96 * 96);
+    }
+  });
+
+  it('composites a generated background and 3D object through the graph', () => {
+    const s = defaultSettings();
+    const input = createNode('input', 0, 0, { label: 'Media' }, s);
+    const background = createNode('background', 200, 0, {
+      mode: 'checker',
+      colorA: '#ff0000',
+      colorB: '#0000ff',
+      scale: 16,
+    }, s);
+    const object = createNode('object3d', 400, 0, {
+      primitive: 'cube',
+      rotationX: 0,
+      rotationY: 0,
+      rotationZ: 0,
+      antiAlias: 0,
+    }, s);
+    let graph = { id: 'g', name: 'scene', description: '', nodes: [input, background, object], edges: [] } as PipelineGraph;
+    graph = connect(graph, input.id, 'media', background.id, 'media');
+    graph = connect(graph, background.id, 'media', object.id, 'media');
+    const transparentSource: ReturnType<typeof createImage> = createImage(64, 64);
+    const asset: GraphAsset = {
+      id: 'transparent',
+      name: 'transparent.png',
+      kind: 'image',
+      width: 64,
+      height: 64,
+      image: transparentSource,
+    };
+    const evaluation = evaluateGraph(graph, { assetsByNode: { [input.id]: [asset] } });
+    expect(evaluation.errors).toEqual([]);
+    const item = mediaAtPort(evaluation, object.id)[0];
+    expect(item.sourceWidth).toBe(64);
+    expect(item.sourceHeight).toBe(64);
+    expect(item.underlay).toBeDefined();
+    expect(item.overlay).toBeDefined();
+    // The transparent source shows the generated checkerboard, and the cube is
+    // composited on top of it.
+    expect(pixel(item.source, 2, 2)).toEqual([255, 0, 0, 255]);
+    expect(pixel(item.source, 20, 2)).toEqual([0, 0, 255, 255]);
+    let objectPixels = 0;
+    for (let i = 0; i < item.source.data.length; i += 4) {
+      const r = item.source.data[i];
+      const g = item.source.data[i + 1];
+      const b = item.source.data[i + 2];
+      if (r > g && g > b && b < 150) objectPixels++;
+    }
+    expect(objectPixels).toBeGreaterThan(50);
+
+    // Live video frames use the same underlay/overlay pair.
+    const frame = createImage(64, 64);
+    const composited = applyTrackedAlphaCuts(item, frame, 0, undefined);
+    expect(pixel(composited, 2, 2)).toEqual([255, 0, 0, 255]);
+    expect(pixel(composited, 20, 2)).toEqual([0, 0, 255, 255]);
   });
 });
 
