@@ -1,6 +1,12 @@
 # PixelArtify Studio
 
+[![CI](https://github.com/GustafMos/pixelartify-studio/actions/workflows/ci.yml/badge.svg)](https://github.com/GustafMos/pixelartify-studio/actions/workflows/ci.yml)
+[![Deploy](https://github.com/GustafMos/pixelartify-studio/actions/workflows/deploy.yml/badge.svg)](https://github.com/GustafMos/pixelartify-studio/actions/workflows/deploy.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-4cc9f0.svg)](LICENSE)
+
 **Edge-aware, resolution-independent pixel art at scale — with a node graph, palettes, dithering, layer separation, video and spritesheets.**
+
+**Live demo:** <https://gustafmos.github.io/pixelartify-studio/>
 
 PixelArtify Studio turns drawings, photos and videos into deliberate pixel art. It is built around the idea that pixel art is a *design resolution*, not a resized photo: a 480p and a 1080p source with the same preset produce the same art dimensions, the same feature scale and the same dither texture.
 
