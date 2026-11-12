@@ -96,7 +96,7 @@ The studio targets modern Chromium/Firefox/Safari. Video decoding/encoding uses 
 
 **Adding after the selected node:** when a node is selected, adding a new one places it to the right and splices it into that node's outgoing connection. The same applies to **Shift+Space**, which opens a searchable command palette with recently used node types at the top. Use ↑/↓ and Enter to add; Esc closes.
 
-**Detaching:** hold **Shift** while dragging a node to detach it from all of its wires. While dragging, its old connections disappear. Drop it onto another wire to splice it back in, or drop it on empty canvas to leave it detached.
+**Detaching:** hold **Shift** while dragging a node to detach it from all of its wires. The chain behind it is bridged automatically so the tree stays connected (a Router is inserted when several branches meet). Drop the node onto another wire to splice it back in, or drop it on empty canvas to leave it detached.
 
 **Inserting:** drag a node by its title bar and drop it on a wire. The wire highlights green while the drop target is valid; releasing splices the node between the two existing nodes. Nodes with an incompatible port type, an occupied single input or a would-be cycle are left untouched.
 

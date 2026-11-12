@@ -138,6 +138,7 @@ interface StudioContextValue {
   deleteEdge: (edgeId: string) => void;
   insertNodeOnEdge: (nodeId: string, edgeId: string) => boolean;
   moveNodeDetached: (nodeId: string, x: number, y: number, edgeId: string | null) => boolean;
+  detachNodeWithBridge: (nodeId: string) => void;
   addAssets: (nodeId: string, files: File[]) => Promise<void>;
   importFiles: (nodeId: string, files: File[]) => Promise<void>;
   removeAsset: (nodeId: string, assetId: string) => void;
@@ -784,6 +785,17 @@ export function StudioProvider({ children }: { children: React.ReactNode }): Rea
     [graph, mutateGraph, notify],
   );
 
+  const detachNodeWithBridge = useCallback((nodeId: string) => {
+    const node = graph.nodes.find((n) => n.id === nodeId);
+    if (!node) return;
+    const result = deleteNodePreservingGraph(graph, nodeId);
+    const next: PipelineGraph = {
+      ...result.graph,
+      nodes: [...result.graph.nodes.filter((n) => n.id !== nodeId), node],
+    };
+    mutateGraph(() => next, true);
+  }, [graph, mutateGraph]);
+
   const addAssetsInternal = useCallback(async (nodeId: string, files: File[]) => {
     const supported = files.filter((f) => fileKind(f) !== null);
     if (supported.length === 0) {
@@ -1241,6 +1253,7 @@ export function StudioProvider({ children }: { children: React.ReactNode }): Rea
     deleteEdge,
     insertNodeOnEdge,
     moveNodeDetached,
+    detachNodeWithBridge,
     addAssets: addAssetsInternal,
     importFiles,
     removeAsset,

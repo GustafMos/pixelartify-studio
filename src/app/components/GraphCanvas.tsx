@@ -135,6 +135,7 @@ interface DragState {
   moved: boolean;
   /** Shift-drag detaches the node from its wires and reattaches on drop. */
   detach?: boolean;
+  detached?: boolean;
 }
 
 interface LinkState {
@@ -203,6 +204,7 @@ export function GraphCanvas(): React.ReactElement {
     selectNode,
     moveNode,
     moveNodeDetached,
+    detachNodeWithBridge,
     addEdge,
     deleteEdge,
     insertNodeOnEdge,
@@ -224,6 +226,7 @@ export function GraphCanvas(): React.ReactElement {
   const [hoverEdgeId, setHoverEdgeId] = useState<string | null>(null);
   const [insertEdgeId, setInsertEdgeId] = useState<string | null>(null);
   const userMovedRef = useRef(false);
+  const detachedRef = useRef<string | null>(null);
 
   const setLinkState = useCallback((next: LinkState | null) => {
     linkRef.current = next;
@@ -390,13 +393,20 @@ export function GraphCanvas(): React.ReactElement {
   useEffect(() => {
     if (!drag) return;
     const onMove = (e: PointerEvent): void => {
+      const movedDistance =
+        Math.abs(e.clientX - drag.startClientX) + Math.abs(e.clientY - drag.startClientY);
+      if (drag.detach && !drag.detached && movedDistance > 3 && detachedRef.current !== drag.id) {
+        detachedRef.current = drag.id;
+        detachNodeWithBridge(drag.id);
+      }
       setDrag((prev) =>
         prev
           ? {
               ...prev,
               dx: (e.clientX - prev.startClientX) / view.zoom,
               dy: (e.clientY - prev.startClientY) / view.zoom,
-              moved: prev.moved || Math.abs(e.clientX - prev.startClientX) + Math.abs(e.clientY - prev.startClientY) > 3,
+              moved: prev.moved || movedDistance > 3,
+              detached: prev.detached || (prev.detach === true && movedDistance > 3),
             }
           : prev,
       );
@@ -415,6 +425,7 @@ export function GraphCanvas(): React.ReactElement {
         }
         return null;
       });
+      detachedRef.current = null;
       setInsertEdgeId(null);
     };
     window.addEventListener('pointermove', onMove);
@@ -423,7 +434,7 @@ export function GraphCanvas(): React.ReactElement {
       window.removeEventListener('pointermove', onMove);
       window.removeEventListener('pointerup', onUp);
     };
-  }, [drag, findInsertEdge, insertNodeOnEdge, moveNode, moveNodeDetached, view.zoom]);
+  }, [drag, findInsertEdge, insertNodeOnEdge, moveNode, moveNodeDetached, detachNodeWithBridge, view.zoom]);
 
   useEffect(() => {
     if (!pan) return;
@@ -785,6 +796,7 @@ export function GraphCanvas(): React.ReactElement {
                     e.stopPropagation();
                     if ((e.target as HTMLElement).closest('button')) return;
                     selectNode(node.id);
+                    detachedRef.current = null;
                     setDrag({
                       id: node.id,
                       startClientX: e.clientX,
