@@ -358,6 +358,14 @@ This project is not affiliated with Adobe. Adobe Color inspired the harmony/cont
 
 ---
 
+## Support my cats
+
+If you want to support me and my projects, help me fund tasty anti-allergenic food for my two cats, **Carla-Mittersteig von Starhemberg** and **Rosa-Luxemburg von Starhemberg**. <3 Thank you!
+
+**Ko-fi:** <https://ko-fi.com/ripscorpy> · [FUNDING.md](FUNDING.md)
+
+---
+
 ## License
 
 MIT. See [LICENSE](LICENSE). Third-party dependencies retain their licenses; Mediabunny is MPL-2.0 and is used unmodified as a dependency.
