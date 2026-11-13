@@ -6,6 +6,7 @@ import { useStudio } from '../store';
 import { pixelImageToBlob, downloadBlob, pixelImageToDataUrl } from '../io';
 import { renderPixelArt, settingsFromItem } from '../../core';
 import { applyTrackedAlphaCuts } from '../../core/graph';
+import { projectedObjectCenter, DEFAULT_OBJECT3D, type Render3DParams } from '../../core/render3d';
 import { playbackPaletteKey, playbackSettings } from '../playback';
 import { GPU_MIN_PIXELS, gpuAvailable } from '../gpuPixelate';
 import { GPU_MIN_DITHER_PIXELS, gpuDitherAvailable, supportsGpuDither } from '../gpuFinish';
@@ -13,6 +14,7 @@ import { GPU_MIN_EFFECT_PIXELS, gpuEffectsAvailable, supportsGpuEffects } from '
 import { GPU_MIN_LAYER_PIXELS, gpuLayersAvailable } from '../gpuLayers';
 import { Icon } from './icons';
 import { Badge, IconButton, Segmented, Slider, Spinner } from './controls';
+import { TransformGizmo } from './TransformGizmo';
 
 export function Viewer({ resizeKey }: { resizeKey?: number | string } = {}): React.ReactElement {
   const {
@@ -55,6 +57,8 @@ export function Viewer({ resizeKey }: { resizeKey?: number | string } = {}): Rea
     activeAssetId,
     previewFullQuality,
     setPreviewFullQuality,
+    colorSpace,
+    setColorSpace,
   } = useStudio();
 
   const viewportRef = useRef<HTMLDivElement>(null);
@@ -92,6 +96,18 @@ export function Viewer({ resizeKey }: { resizeKey?: number | string } = {}): Rea
   const art = preview?.art ?? null;
   const artW = art?.width ?? 1;
   const artH = art?.height ?? 1;
+
+  const object3dSelected = selectedNode?.type === 'object3d' ? selectedNode : null;
+  const transformNode = selectedNode?.type === 'transform' ? selectedNode : null;
+  const offscreenDot = useMemo(() => {
+    if (!object3dSelected || !art) return null;
+    const params = { ...DEFAULT_OBJECT3D, ...(object3dSelected.params as Partial<Render3DParams>) };
+    const c = projectedObjectCenter(params, art.width, art.height);
+    const nx = c.x / Math.max(1, art.width);
+    const ny = c.y / Math.max(1, art.height);
+    if (nx >= 0 && nx <= 1 && ny >= 0 && ny <= 1) return null;
+    return { x: Math.max(0, Math.min(1, nx)), y: Math.max(0, Math.min(1, ny)) };
+  }, [object3dSelected, art]);
   const gpuSampler = useMemo(() => gpuAvailable(), []);
   const gpuActive = gpuSampler && artW * artH >= GPU_MIN_PIXELS;
   const ditherSampler = useMemo(() => gpuDitherAvailable(), []);
@@ -125,12 +141,12 @@ export function Viewer({ resizeKey }: { resizeKey?: number | string } = {}): Rea
     if (!canvas) return;
     if (canvas.width !== image.width) canvas.width = image.width;
     if (canvas.height !== image.height) canvas.height = image.height;
-    const ctx = canvas.getContext('2d');
+    const ctx = canvas.getContext('2d', { colorSpace, willReadFrequently: true });
     if (!ctx) return;
-    const frame = ctx.createImageData(image.width, image.height);
+    const frame = ctx.createImageData(image.width, image.height, { colorSpace });
     frame.data.set(image.data);
     ctx.putImageData(frame, 0, 0);
-  }, []);
+  }, [colorSpace]);
 
   useEffect(() => {
     if (art) paintArt(art);
@@ -200,18 +216,24 @@ export function Viewer({ resizeKey }: { resizeKey?: number | string } = {}): Rea
     const baseSettings = settingsFromItem(activeItem);
     const renderSettings = playbackSettings(baseSettings, activeItem);
     const paletteKey = playbackPaletteKey(baseSettings, activeItem.assetId);
-    let timer = 0;
+    let raf = 0;
+    let lastRender = 0;
     let lastTimeUpdate = 0;
     let lastStopTime = -1;
     let stopped = false;
 
-    const tick = () => {
+    // Pre-allocate the decode frame so playback does not allocate per frame.
+    const frame: PixelImage = { width: 0, height: 0, data: new Uint8ClampedArray(0) };
+
+    const tick = (now: number): void => {
       if (stopped) return;
+      raf = requestAnimationFrame(tick);
+      // Cap the render rate and skip when the previous render is still running,
+      // so the video element stays smooth instead of queueing work.
+      if (now - lastRender < 40) return;
+      lastRender = now;
       const video = videoElRef.current;
-      if (!video || video.videoWidth === 0) {
-        timer = window.setTimeout(tick, 40);
-        return;
-      }
+      if (!video || video.videoWidth === 0) return;
       const retime = activeItem.retime;
       const rawTime = video.currentTime;
       const time =
@@ -220,10 +242,7 @@ export function Viewer({ resizeKey }: { resizeKey?: number | string } = {}): Rea
           : rawTime;
       // Hold the canvas between stop-motion samples instead of redrawing the
       // same quantised frame.
-      if (retime?.mode === 'stop-motion' && Math.abs(time - lastStopTime) < 1e-6) {
-        timer = window.setTimeout(tick, 40);
-        return;
-      }
+      if (retime?.mode === 'stop-motion' && Math.abs(time - lastStopTime) < 1e-6) return;
       lastStopTime = time;
       const started = performance.now();
       try {
@@ -237,18 +256,23 @@ export function Viewer({ resizeKey }: { resizeKey?: number | string } = {}): Rea
         }
         ctx.drawImage(video, 0, 0, w, h);
         const data = ctx.getImageData(0, 0, w, h);
-        const frame: PixelImage = {
-          width: w,
-          height: h,
-          data: new Uint8ClampedArray(data.data),
-        };
+        frame.width = w;
+        frame.height = h;
+        if (frame.data.length !== data.data.length) frame.data = new Uint8ClampedArray(data.data);
+        else frame.data.set(data.data);
         const source = applyTrackedAlphaCuts(activeItem, frame, time, trackedMasks);
         const paletteOverride =
           playbackPaletteRef.current?.key === paletteKey
             ? playbackPaletteRef.current.colors
             : undefined;
         const result = renderPixelArt(
-          { image: source, masks: activeItem.masks, settings: renderSettings },
+          {
+            image: source,
+            masks: activeItem.masks,
+            settings: renderSettings,
+            underlay: activeItem.underlay,
+            overlay: activeItem.overlay,
+          },
           { upscale: false, seed: 0, maxWorkingSide: 384, paletteOverride, time },
         );
         if (result.palette.length > 0) {
@@ -263,10 +287,7 @@ export function Viewer({ resizeKey }: { resizeKey?: number | string } = {}): Rea
         stopped = true;
         setVideoPlaying(false);
         notify(`Playback render failed: ${err instanceof Error ? err.message : err}`, 'error');
-        return;
       }
-      const elapsed = performance.now() - started;
-      timer = window.setTimeout(tick, Math.max(0, 40 - elapsed));
     };
 
     el.loop = true;
@@ -274,10 +295,10 @@ export function Viewer({ resizeKey }: { resizeKey?: number | string } = {}): Rea
       setVideoPlaying(false);
       notify('Could not play this video in the browser.', 'warn');
     });
-    tick();
+    raf = requestAnimationFrame(tick);
     return () => {
       stopped = true;
-      window.clearTimeout(timer);
+      cancelAnimationFrame(raf);
       el.pause();
     };
   }, [
@@ -307,15 +328,18 @@ export function Viewer({ resizeKey }: { resizeKey?: number | string } = {}): Rea
     const tick = (): void => {
       if (stopped) return;
       const elapsed = (performance.now() - start) / 1000;
-      let t = base + elapsed;
-      if (animationLoop && animationDuration > 0) t %= animationDuration;
+      const raw = base + elapsed;
+      // Render with monotonic time so formulas using `t` (rotation) continue
+      // seamlessly across the loop point; only the readout/scrubber wraps.
+      const t = raw;
+      const display = animationLoop && animationDuration > 0 ? raw % animationDuration : raw;
       const frameStart = performance.now();
       try {
         const result = renderAnimationFrame(t);
         if (result) paintArt(result.art);
         if (frameStart - lastUpdate > 250) {
           lastUpdate = frameStart;
-          setAnimationTime(t);
+          setAnimationTime(display);
         }
       } catch (err) {
         stopped = true;
@@ -891,6 +915,14 @@ export function Viewer({ resizeKey }: { resizeKey?: number | string } = {}): Rea
             active={!previewFullQuality}
             onClick={() => setPreviewFullQuality(!previewFullQuality)}
           />
+          <button
+            type="button"
+            className={`gamut-toggle ${colorSpace === 'display-p3' ? 'is-active' : ''}`}
+            onClick={() => setColorSpace(colorSpace === 'display-p3' ? 'srgb' : 'display-p3')}
+            title="Wide-gamut display (Display-P3) for vivid previews. Exports stay sRGB."
+          >
+            {colorSpace === 'display-p3' ? 'P3' : 'sRGB'}
+          </button>
           {preview ? (
             <a
               className="icon-btn"
@@ -948,6 +980,7 @@ export function Viewer({ resizeKey }: { resizeKey?: number | string } = {}): Rea
             >
               <canvas
                 ref={artCanvasRef}
+                key={colorSpace}
                 className="art-canvas"
                 width={artW}
                 height={artH}
@@ -955,6 +988,9 @@ export function Viewer({ resizeKey }: { resizeKey?: number | string } = {}): Rea
                 aria-label="Pixel art preview"
                 style={{ width: '100%', height: '100%', imageRendering: 'pixelated' }}
               />
+              {transformNode && !maskEdit ? (
+                <TransformGizmo node={transformNode} artW={artW} artH={artH} zoom={scale} />
+              ) : null}
               {compare && originalUrl && !maskEdit ? (
                 <>
                   <img
@@ -1181,6 +1217,15 @@ export function Viewer({ resizeKey }: { resizeKey?: number | string } = {}): Rea
                     height: maskEdit.brushSize * scale,
                   }}
                 />
+              ) : null}
+              {offscreenDot && !maskEdit ? (
+                <div
+                  className="object3d-offscreen-dot"
+                  style={{ left: `${offscreenDot.x * 100}%`, top: `${offscreenDot.y * 100}%` }}
+                  title="3D object centre (off-screen)"
+                >
+                  <span />
+                </div>
               ) : null}
             </div>
           </div>

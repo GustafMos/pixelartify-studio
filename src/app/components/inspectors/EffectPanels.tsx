@@ -4,6 +4,7 @@ import { DEFAULT_POSTPROCESS } from '../../../core';
 import { useStudio } from '../../store';
 import { Section, Toggle } from '../controls';
 import { EffectsEditor } from '../EffectsEditor';
+import { RegionEditor } from '../RegionEditor';
 
 export function PreprocessPanel({ node }: { node: GraphNode }): React.ReactElement {
   const { updateNodeParams } = useStudio();
@@ -17,6 +18,7 @@ export function PreprocessPanel({ node }: { node: GraphNode }): React.ReactEleme
           onChange={(next) => updateNodeParams(node.id, { ops: next })}
         />
       </Section>
+      <RegionEditor node={node} />
       <div className="info-callout">
         <span>
           Effects are resolution-relative: brush radii and feature sizes are measured in <strong>art pixels</strong>,
@@ -46,6 +48,7 @@ export function PostprocessPanel({ node }: { node: GraphNode }): React.ReactElem
           hint="Keeps bloom, grain and outlines inside the chosen palette."
         />
       </Section>
+      <RegionEditor node={node} />
       <div className="info-callout">
         <span>
           Post effects run after dithering. The <strong>Sprite outline</strong> effect is the fastest way to

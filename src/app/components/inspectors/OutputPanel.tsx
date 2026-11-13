@@ -124,7 +124,16 @@ export function OutputPanel({ node }: { node: GraphNode }): React.ReactElement {
     const input =
       image === item.source ? image : applyTrackedAlphaCuts(item, image, time, trackedMasks);
     return {
-      result: renderPixelArt({ image: input, masks: item.masks, settings }, { upscale: true, time }),
+      result: renderPixelArt(
+        {
+          image: input,
+          masks: item.masks,
+          settings,
+          underlay: item.underlay,
+          overlay: item.overlay,
+        },
+        { upscale: true, time },
+      ),
       settings,
     };
   };
@@ -603,6 +612,8 @@ export function OutputPanel({ node }: { node: GraphNode }): React.ReactElement {
                   : frame,
                 masks: videoItem?.masks,
                 settings: printSettings,
+                underlay: videoItem?.underlay,
+                overlay: videoItem?.overlay,
               },
               { upscale: false },
             );
@@ -614,7 +625,13 @@ export function OutputPanel({ node }: { node: GraphNode }): React.ReactElement {
           setProgress(`Rendering print frame ${i + 1} / ${imageItems.length}`);
           const item = imageItems[i];
           const result = renderPixelArt(
-            { image: item.source, masks: item.masks, settings: { ...settingsFromItem(item), output, video } },
+            {
+              image: item.source,
+              masks: item.masks,
+              settings: { ...settingsFromItem(item), output, video },
+              underlay: item.underlay,
+              overlay: item.overlay,
+            },
             { upscale: false },
           );
           frames.push(result.art);
@@ -670,18 +687,25 @@ export function OutputPanel({ node }: { node: GraphNode }): React.ReactElement {
             options={[
               { value: 'png', label: 'PNG (alpha)' },
               { value: 'webp', label: 'WebP (alpha)' },
+              { value: 'jpeg', label: 'JPEG (no alpha)' },
             ]}
             onChange={(v) => setOutput({ format: v as OutputSettings['format'] })}
           />
           <Slider label="Quality" value={output.quality} min={0.4} max={1} step={0.01} onChange={(v) => setOutput({ quality: v })} />
         </div>
         <Toggle label="Keep transparency" checked={output.transparent} onChange={(v) => setOutput({ transparent: v })} />
-        <Toggle label="Include JSON manifest" checked={output.writeManifest} onChange={(v) => setOutput({ writeManifest: v })} />
-        <Toggle label="Export layers" checked={output.exportLayers} onChange={(v) => setOutput({ exportLayers: v })} />
         <div className="btn-column">
           <button type="button" className="primary-btn" onClick={() => void exportCurrent()} disabled={isExporting}>
             <Icon name="download" size={15} /> {isExporting ? 'Exporting…' : 'Export current image'}
           </button>
+        </div>
+        {exportProgress ? <p className="progress-line">{exportProgress}</p> : null}
+      </Section>
+
+      <Section title="Extra: manifest, layers & ZIP" defaultOpen={false}>
+        <Toggle label="Include JSON manifest" checked={output.writeManifest} onChange={(v) => setOutput({ writeManifest: v })} />
+        <Toggle label="Export layers" checked={output.exportLayers} onChange={(v) => setOutput({ exportLayers: v })} />
+        <div className="btn-column">
           <div className="two-col">
             <button type="button" className="ghost-btn small" onClick={() => void exportBatch()} disabled={isExporting}>
               <Icon name="layers" size={14} /> Batch ZIP
@@ -691,7 +715,6 @@ export function OutputPanel({ node }: { node: GraphNode }): React.ReactElement {
             </button>
           </div>
         </div>
-        {exportProgress ? <p className="progress-line">{exportProgress}</p> : null}
       </Section>
 
       <Section title="Video & animation">
@@ -713,6 +736,7 @@ export function OutputPanel({ node }: { node: GraphNode }): React.ReactElement {
               { value: 'avc', label: 'H.264 / MP4' },
               { value: 'vp9', label: 'VP9 / WebM' },
               { value: 'av1', label: 'AV1 / MP4' },
+              { value: 'hevc', label: 'HEVC / H.265' },
             ]}
             onChange={(v) => setVideo({ codec: v as VideoSettings['codec'] })}
           />
@@ -724,6 +748,69 @@ export function OutputPanel({ node }: { node: GraphNode }): React.ReactElement {
           <Slider label="End" value={video.end ?? duration} min={0} max={Math.max(0.1, duration)} step={0.05} unit="s" onChange={(v) => setVideo({ end: v })} />
         </div>
 
+        <div className="stat-strip">
+          <div>
+            <span>Source</span>
+            <strong>{activeAsset?.kind === 'video' ? `${duration.toFixed(1)} s` : 'image sequence'}</strong>
+          </div>
+          <div>
+            <span>Est. frames</span>
+            <strong>{frameEstimate || outputItems.length}</strong>
+          </div>
+          <div>
+            <span>Art</span>
+            <strong>
+              {activeItem ? `${activeItem.resolution.value}` : '—'}
+            </strong>
+          </div>
+        </div>
+
+        {activeAsset?.kind !== 'video' ? (
+          <div className="info-callout">
+            <Icon name={hasAnimation ? 'clock' : 'film'} size={16} />
+            <span>
+              {hasAnimation
+                ? 'This graph is self-contained, so no Media input is required. Use Render animation to render the Animate/Timeline sequence.'
+                : 'Select a video in a Media input to enable video export. Image batches can still be packed as a spritesheet.'}
+            </span>
+          </div>
+        ) : null}
+
+        <div className="btn-column">
+          {hasAnimation ? (
+            <button
+              type="button"
+              className="primary-btn"
+              onClick={() => void exportAnimation()}
+              disabled={busy || isExporting}
+              title="Render the Animate/Timeline graph without requiring a Media input."
+            >
+              <Icon name="clock" size={15} /> Render animation
+            </button>
+          ) : null}
+          {activeAsset?.kind === 'video' || !hasAnimation ? (
+            <button type="button" className="primary-btn" onClick={() => void exportVideo()} disabled={busy || isExporting}>
+              <Icon name="film" size={15} /> {activeAsset?.kind === 'video' ? 'Render video / sheet' : 'Render video input / sheet'}
+            </button>
+          ) : null}
+          <div className="two-col">
+            <button type="button" className="ghost-btn small" onClick={() => void exportSpritesheetOnly()} disabled={busy || isExporting}>
+              <Icon name="sheet" size={14} /> Image sheet
+            </button>
+            <button type="button" className="ghost-btn small danger" onClick={() => void stop()} disabled={!busy}>
+              <Icon name="close" size={14} /> Cancel
+            </button>
+          </div>
+        </div>
+        {progress ? <p className="progress-line">{progress}</p> : null}
+        {busy ? <div className="progress-bar"><span /></div> : null}
+        <p className="micro-copy">
+          Browser video export uses WebCodecs. Audio is not re-muxed; use the CLI with ffmpeg when you need the
+          original soundtrack. Transparent pixels are flattened for H.264/VP9 output.
+        </p>
+      </Section>
+
+      <Section title="Extra: spritesheet & print" defaultOpen={false}>
         <div className="inset-panel">
           <span className="inset-title">Spritesheet</span>
           <div className="two-col">
@@ -788,67 +875,6 @@ export function OutputPanel({ node }: { node: GraphNode }): React.ReactElement {
             align to the marks.
           </p>
         </div>
-
-        <div className="stat-strip">
-          <div>
-            <span>Source</span>
-            <strong>{activeAsset?.kind === 'video' ? `${duration.toFixed(1)} s` : 'image sequence'}</strong>
-          </div>
-          <div>
-            <span>Est. frames</span>
-            <strong>{frameEstimate || outputItems.length}</strong>
-          </div>
-          <div>
-            <span>Art</span>
-            <strong>
-              {activeItem ? `${activeItem.resolution.value}` : '—'}
-            </strong>
-          </div>
-        </div>
-
-        {activeAsset?.kind !== 'video' ? (
-          <div className="info-callout">
-            <Icon name={hasAnimation ? 'clock' : 'film'} size={16} />
-            <span>
-              {hasAnimation
-                ? 'This graph is self-contained, so no Media input is required. Use Render animation to render the Animate/Timeline sequence.'
-                : 'Select a video in a Media input to enable video export. Image batches can still be packed as a spritesheet.'}
-            </span>
-          </div>
-        ) : null}
-
-        <div className="btn-column">
-          {hasAnimation ? (
-            <button
-              type="button"
-              className="primary-btn"
-              onClick={() => void exportAnimation()}
-              disabled={busy || isExporting}
-              title="Render the Animate/Timeline graph without requiring a Media input."
-            >
-              <Icon name="clock" size={15} /> Render animation
-            </button>
-          ) : null}
-          {activeAsset?.kind === 'video' || !hasAnimation ? (
-            <button type="button" className="primary-btn" onClick={() => void exportVideo()} disabled={busy || isExporting}>
-              <Icon name="film" size={15} /> {activeAsset?.kind === 'video' ? 'Render video / sheet' : 'Render video input / sheet'}
-            </button>
-          ) : null}
-          <div className="two-col">
-            <button type="button" className="ghost-btn small" onClick={() => void exportSpritesheetOnly()} disabled={busy || isExporting}>
-              <Icon name="sheet" size={14} /> Image sheet
-            </button>
-            <button type="button" className="ghost-btn small danger" onClick={() => void stop()} disabled={!busy}>
-              <Icon name="close" size={14} /> Cancel
-            </button>
-          </div>
-        </div>
-        {progress ? <p className="progress-line">{progress}</p> : null}
-        {busy ? <div className="progress-bar"><span /></div> : null}
-        <p className="micro-copy">
-          Browser video export uses WebCodecs. Audio is not re-muxed; use the CLI with ffmpeg when you need the
-          original soundtrack. Transparent pixels are flattened for H.264/VP9 output.
-        </p>
       </Section>
 
       <Section title="Preset & output info" defaultOpen={false}>

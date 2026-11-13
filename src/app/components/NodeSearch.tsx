@@ -1,6 +1,9 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import type { GraphNodeType } from '../../core/types';
 import { NODE_DEFS } from '../../core/graph';
+import { PREPROCESS_DEFS, POSTPROCESS_DEFS, createPreprocessOp, createPostprocessOp } from '../../core/preprocess';
+import { DEFAULT_REGION } from '../../core/region';
+import { deepClone } from '../../core/defaults';
 import { useStudio } from '../store';
 import { TYPE_ICON } from './GraphCanvas';
 import { Icon } from './icons';
@@ -8,6 +11,31 @@ import { Icon } from './icons';
 const ALL_TYPES: GraphNodeType[] = (Object.keys(NODE_DEFS) as GraphNodeType[]).filter(
   (type) => type !== 'group',
 );
+
+interface EffectEntry {
+  key: string;
+  stage: 'pre' | 'post';
+  effectType: string;
+  title: string;
+  description: string;
+}
+
+const EFFECT_ENTRIES: EffectEntry[] = [
+  ...PREPROCESS_DEFS.map((d) => ({
+    key: `pre:${d.type}`,
+    stage: 'pre' as const,
+    effectType: d.type,
+    title: d.title,
+    description: d.description,
+  })),
+  ...POSTPROCESS_DEFS.map((d) => ({
+    key: `post:${d.type}`,
+    stage: 'post' as const,
+    effectType: d.type,
+    title: d.title,
+    description: d.description,
+  })),
+];
 
 function matches(type: GraphNodeType, query: string): boolean {
   const q = query.trim().toLowerCase();
@@ -20,9 +48,20 @@ function matches(type: GraphNodeType, query: string): boolean {
   );
 }
 
+function effectMatches(entry: EffectEntry, query: string): boolean {
+  const q = query.trim().toLowerCase();
+  if (!q) return true;
+  return (
+    entry.title.toLowerCase().includes(q) ||
+    entry.description.toLowerCase().includes(q) ||
+    entry.effectType.toLowerCase().includes(q)
+  );
+}
+
 /**
  * Command palette for adding nodes. Shift+Space opens it, recently used node
- * types float to the top, and the new node is inserted after the selected node.
+ * types float to the top, the new node is added at the cursor (or after the
+ * selected node), and individual effects can be added pre-configured.
  */
 export function NodeSearch(): React.ReactElement | null {
   const { addNode, recentNodeTypes, selectedNode } = useStudio();
@@ -65,6 +104,7 @@ export function NodeSearch(): React.ReactElement | null {
   }, [query]);
 
   const filtered = useMemo(() => ALL_TYPES.filter((type) => matches(type, query)), [query]);
+  const matchedEffects = useMemo(() => EFFECT_ENTRIES.filter((e) => effectMatches(e, query)), [query]);
   const recent = useMemo(
     () =>
       recentNodeTypes
@@ -75,6 +115,9 @@ export function NodeSearch(): React.ReactElement | null {
   );
   const rest = useMemo(() => filtered.filter((type) => !recent.includes(type)), [filtered, recent]);
   const ordered = useMemo(() => [...recent, ...rest], [recent, rest]);
+
+  // Flat list of selectable rows (nodes then effects) for keyboard navigation.
+  const rowCount = ordered.length + matchedEffects.length;
 
   useEffect(() => {
     if (!open) return;
@@ -89,19 +132,38 @@ export function NodeSearch(): React.ReactElement | null {
     setActive(0);
   };
 
+  const chooseEffect = (entry: EffectEntry): void => {
+    const isPre = entry.stage === 'pre';
+    const op = isPre
+      ? createPreprocessOp(entry.effectType as Parameters<typeof createPreprocessOp>[0])
+      : createPostprocessOp(entry.effectType as Parameters<typeof createPostprocessOp>[0]);
+    const params = isPre
+      ? { ops: [op], region: deepClone(DEFAULT_REGION) }
+      : { postprocess: { ops: [op], lockPalette: false }, region: deepClone(DEFAULT_REGION) };
+    addNode(isPre ? 'preprocess' : 'postprocess', undefined, undefined, params);
+    setOpen(false);
+    setQuery('');
+    setActive(0);
+  };
+
   if (!open) return null;
 
   const onInputKey = (e: React.KeyboardEvent<HTMLInputElement>): void => {
     if (e.key === 'ArrowDown') {
       e.preventDefault();
-      setActive((i) => (ordered.length === 0 ? 0 : (i + 1) % ordered.length));
+      setActive((i) => (rowCount === 0 ? 0 : (i + 1) % rowCount));
     } else if (e.key === 'ArrowUp') {
       e.preventDefault();
-      setActive((i) => (ordered.length === 0 ? 0 : (i - 1 + ordered.length) % ordered.length));
+      setActive((i) => (rowCount === 0 ? 0 : (i - 1 + rowCount) % rowCount));
     } else if (e.key === 'Enter') {
       e.preventDefault();
-      const type = ordered[active];
-      if (type) choose(type);
+      const nodeType = ordered[active];
+      if (nodeType) {
+        choose(nodeType);
+        return;
+      }
+      const entry = matchedEffects[active - ordered.length];
+      if (entry) chooseEffect(entry);
     } else if (e.key === 'Escape') {
       e.preventDefault();
       setOpen(false);
@@ -130,6 +192,25 @@ export function NodeSearch(): React.ReactElement | null {
     );
   };
 
+  const effectRow = (entry: EffectEntry, index: number): React.ReactElement => (
+    <button
+      key={entry.key}
+      type="button"
+      data-index={index}
+      className={`node-search-row ${index === active ? 'is-active' : ''}`}
+      onMouseEnter={() => setActive(index)}
+      onClick={() => chooseEffect(entry)}
+    >
+      <span className="node-search-icon" style={{ color: entry.stage === 'pre' ? '#f72585' : '#ef476f' }}>
+        <Icon name="wand" size={16} />
+      </span>
+      <span className="node-search-copy">
+        <strong>{entry.title}</strong>
+        <small>{entry.stage === 'pre' ? 'Pre-process effect' : 'Post-process effect'} · {entry.description}</small>
+      </span>
+    </button>
+  );
+
   return (
     <div
       className="node-search-backdrop"
@@ -145,13 +226,13 @@ export function NodeSearch(): React.ReactElement | null {
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             onKeyDown={onInputKey}
-            placeholder="Search nodes…"
+            placeholder="Search nodes or effects…"
             aria-label="Search nodes"
           />
           <kbd>Esc</kbd>
         </div>
         <div className="node-search-context">
-          {selectedNode ? `Add after “${selectedNode.title}”` : 'Add to graph'}
+          {selectedNode ? `Add after “${selectedNode.title}”` : 'Add at cursor'}
           <span>· ↑↓ navigate · Enter add</span>
         </div>
         <div className="node-search-list">
@@ -161,12 +242,21 @@ export function NodeSearch(): React.ReactElement | null {
               {recent.map((type, i) => row(type, i))}
             </>
           ) : null}
-          <div className="node-search-group">All nodes</div>
+          <div className="node-search-group">Nodes</div>
           {rest.length > 0 ? (
             rest.map((type, i) => row(type, recent.length + i))
           ) : (
             <div className="node-search-empty">No nodes match “{query}”.</div>
           )}
+          {matchedEffects.length > 0 ? (
+            <>
+              <div className="node-search-group">Effects (pre-configured)</div>
+              {matchedEffects.map((entry, i) => effectRow(entry, ordered.length + i))}
+            </>
+          ) : null}
+          {rest.length === 0 && matchedEffects.length === 0 ? (
+            <div className="node-search-empty">No matches for “{query}”.</div>
+          ) : null}
         </div>
       </div>
     </div>

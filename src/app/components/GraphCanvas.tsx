@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { NODE_DEFS } from '../../core/graph';
-import type { GraphEdge, GraphNode, GraphNodeType } from '../../core/types';
+import { NODE_DEFS, type NodePortDef } from '../../core/graph';
+import type { GraphEdge, GraphNode, GraphNodeType, PipelineGraph } from '../../core/types';
+import { getPath, setPath } from '../../core/value';
 import { DITHER_BY_ID } from '../../core/dither';
 import { pixelImageToDataUrl } from '../io';
 import { useStudio } from '../store';
@@ -40,13 +41,43 @@ export const TYPE_ICON: Record<GraphNodeType, IconName> = {
   postprocess: 'settings',
   merge: 'link',
   router: 'link',
+  constant: 'hash',
+  math: 'func',
+  text: 'text',
+  transform: 'move',
+  switcher: 'link',
+  shape2d: 'shape',
+  particles: 'sparkles',
   output: 'download',
 };
 
-function nodeHeight(node: GraphNode, showPreview: boolean): number {
+function nodeHeight(node: GraphNode, showPreview: boolean, inputCount?: number): number {
   const def = NODE_DEFS[node.type];
-  const ports = Math.max(def.inputs.length, def.outputs.length);
-  return HEADER_H + 16 + ports * PORT_STEP + FOOTER_H + (showPreview ? PREVIEW_H : 0);
+  const inputs = inputCount ?? def.inputs.length;
+  const ports = Math.max(inputs, def.outputs.length);
+  const pins = pinnedFieldRows(node);
+  return HEADER_H + 16 + ports * PORT_STEP + pins * 20 + FOOTER_H + (showPreview ? PREVIEW_H : 0);
+}
+
+function pinnedFieldRows(node: GraphNode): number {
+  const pins = (node.params.pins as Record<string, boolean> | undefined) ?? {};
+  return Object.values(pins).filter(Boolean).length;
+}
+
+function visibleInputPorts(node: GraphNode, graph: PipelineGraph): NodePortDef[] {
+  return NODE_DEFS[node.type].inputs.filter(
+    (p) => p.type !== 'value' || graph.edges.some((e) => e.toNode === node.id && e.toPort === 'value'),
+  );
+}
+
+function pinnedFieldList(node: GraphNode): Array<{ path: string; label: string }> {
+  const pins = (node.params.pins as Record<string, boolean> | undefined) ?? {};
+  return Object.keys(pins)
+    .filter((p) => pins[p])
+    .map((path) => ({
+      path,
+      label: path.split('.').pop()?.replace(/[_-]/g, ' ') ?? path,
+    }));
 }
 
 function summaryFor(node: GraphNode, assetCount: number): string {
@@ -139,6 +170,12 @@ function summaryFor(node: GraphNode, assetCount: number): string {
       return 'concatenate batches';
     case 'router':
       return 'pass-through reroute';
+    case 'switcher':
+      return `input ${Number(p.activeIndex ?? 0) + 1}`;
+    case 'shape2d':
+      return `${String(p.shape ?? 'circle')} · ${String(p.fill ?? 'solid')}`;
+    case 'particles':
+      return `${String(p.preset ?? 'dust')} · ${Number(p.count ?? 0)} particles`;
     case 'output': {
       const output = p.output as { format?: string } | undefined;
       const video = p.video as { output?: string } | undefined;
@@ -249,6 +286,8 @@ export function GraphCanvas(): React.ReactElement {
     duplicateNode,
     deleteNode,
     updateNode,
+    updateNodeParams,
+    setGraphCursor,
     mode,
   } = useStudio();
 
@@ -260,6 +299,7 @@ export function GraphCanvas(): React.ReactElement {
   const linkRef = useRef<LinkState | null>(null);
   const [addOpen, setAddOpen] = useState(false);
   const [addSearch, setAddSearch] = useState('');
+  const [addActive, setAddActive] = useState(0);
   const [hoverEdgeId, setHoverEdgeId] = useState<string | null>(null);
   const [insertEdgeId, setInsertEdgeId] = useState<string | null>(null);
   const userMovedRef = useRef(false);
@@ -682,7 +722,9 @@ export function GraphCanvas(): React.ReactElement {
         ? '#e879f9'
         : type === 'motion'
           ? '#22d3ee'
-          : '#4cc9f0';
+          : type === 'value'
+            ? '#fbbf24'
+            : '#4cc9f0';
 
   return (
     <div className="graph-shell">
@@ -724,19 +766,44 @@ export function GraphCanvas(): React.ReactElement {
               <Icon name="search" size={14} />
               <input
                 autoFocus
-                placeholder="Search nodes…"
+                placeholder="Search nodes… · ↑↓ · Enter"
                 value={addSearch}
-                onChange={(e) => setAddSearch(e.target.value)}
+                onChange={(e) => {
+                  setAddSearch(e.target.value);
+                  setAddActive(0);
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === 'ArrowDown') {
+                    e.preventDefault();
+                    setAddActive((i) => (filteredTypes.length === 0 ? 0 : (i + 1) % filteredTypes.length));
+                  } else if (e.key === 'ArrowUp') {
+                    e.preventDefault();
+                    setAddActive((i) =>
+                      filteredTypes.length === 0 ? 0 : (i - 1 + filteredTypes.length) % filteredTypes.length,
+                    );
+                  } else if (e.key === 'Enter') {
+                    e.preventDefault();
+                    const type = filteredTypes[addActive];
+                    if (type) {
+                      addNode(type);
+                      setAddOpen(false);
+                      setAddSearch('');
+                    }
+                  } else if (e.key === 'Escape') {
+                    setAddOpen(false);
+                  }
+                }}
               />
             </div>
             <div className="add-node-list">
-              {filteredTypes.map((type) => {
+              {filteredTypes.map((type, index) => {
                 const def = NODE_DEFS[type];
                 return (
                   <button
                     key={type}
                     type="button"
-                    className="add-node-item"
+                    className={`add-node-item ${index === addActive ? 'is-active' : ''}`}
+                    onMouseEnter={() => setAddActive(index)}
                     onClick={() => {
                       addNode(type);
                       setAddOpen(false);
@@ -761,6 +828,11 @@ export function GraphCanvas(): React.ReactElement {
       <div
         ref={viewportRef}
         className={`graph-viewport ${pan ? 'is-panning' : ''} ${link ? 'is-linking' : ''}`}
+        onPointerMove={(e) => {
+          const rect = viewportRef.current?.getBoundingClientRect();
+          if (!rect) return;
+          setGraphCursor((e.clientX - rect.left - view.x) / view.zoom, (e.clientY - rect.top - view.y) / view.zoom);
+        }}
         onPointerDown={(e) => {
           if (e.target !== e.currentTarget && !(e.target as HTMLElement).classList.contains('graph-grid')) return;
           if (linkRef.current) {
@@ -818,7 +890,7 @@ export function GraphCanvas(): React.ReactElement {
               if (inIdx < 0) return null;
               const outPort = fromDef.outputs[outIdx];
               const inPort = NODE_DEFS[to.type].inputs[inIdx];
-              const socketOrder = ['media', 'mask', 'palette', 'motion'];
+              const socketOrder = ['media', 'mask', 'palette', 'motion', 'value'];
               const outTypeIndex = Math.max(0, socketOrder.indexOf(outPort.type));
               const inTypeIndex = Math.max(0, socketOrder.indexOf(inPort.type));
               const x1 = fromGroupPos
@@ -1040,10 +1112,13 @@ export function GraphCanvas(): React.ReactElement {
             const def = NODE_DEFS[node.type];
             const pos = effectivePositions.get(node.id)!;
             const showPreview = node.id === previewNodeId;
-            const height = nodeHeight(node, showPreview);
+            const visibleInputs = visibleInputPorts(node, graph);
+            const height = nodeHeight(node, showPreview, visibleInputs.length);
             const selected = node.id === selectedNodeId || selectedNodeIds.includes(node.id);
-            const portCount = Math.max(def.inputs.length, def.outputs.length);
+            const portCount = Math.max(visibleInputs.length, def.outputs.length);
+            const pinned = pinnedFieldList(node);
             const assets = assetsByNode[node.id] ?? [];
+            if (node.type === 'input' && assets.length === 0) return null;
             const previewSrc = node.type === 'input' ? activeAsset?.thumb : showPreview ? selectedPreview : null;
             return (
               <div
@@ -1128,7 +1203,7 @@ export function GraphCanvas(): React.ReactElement {
                 </div>
 
                 <div className="node-ports" style={{ height: portCount * PORT_STEP + 16 }}>
-                  {def.inputs.map((port, i) => {
+                  {visibleInputs.map((port, i) => {
                       const isSource =
                         link?.fromNode === node.id &&
                         link.fromPort === port.id &&
@@ -1199,6 +1274,31 @@ export function GraphCanvas(): React.ReactElement {
                     );
                   })}
                 </div>
+
+                {pinned.length > 0 ? (
+                  <div className="node-pins">
+                    {pinned.map(({ path, label }) => {
+                      const raw = getPath(node.params, path);
+                      return (
+                        <div className="node-pin-row" key={path}>
+                          <span>{label}</span>
+                          <input
+                            type="number"
+                            value={Number.isFinite(Number(raw)) ? Number(raw) : 0}
+                            onChange={(e) => {
+                              const n = Number(e.target.value);
+                              if (Number.isFinite(n)) {
+                                updateNodeParams(node.id, setPath(node.params, path, n) as Record<string, unknown>);
+                              }
+                            }}
+                            onClick={(e) => e.stopPropagation()}
+                            onPointerDown={(e) => e.stopPropagation()}
+                          />
+                        </div>
+                      );
+                    })}
+                  </div>
+                ) : null}
 
                 <div className="node-footer">
                   <span>{summaryFor(node, assets.length)}</span>

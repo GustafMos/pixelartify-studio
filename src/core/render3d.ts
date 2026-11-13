@@ -10,6 +10,7 @@
 import type { PixelImage } from './types';
 import { createImage } from './image';
 import { clamp01, parseHex } from './color';
+import type { ImportedMesh } from './meshImport';
 
 export type Primitive3D = 'cube' | 'sphere' | 'cylinder' | 'cone' | 'torus' | 'pyramid';
 
@@ -35,6 +36,10 @@ export interface Render3DParams {
   shading: number;
   lightAngle: number;
   antiAlias: number;
+  /** Imported triangle mesh (overrides `primitive`). */
+  mesh?: ImportedMesh;
+  /** Display name of the imported mesh. */
+  meshName?: string;
 }
 
 export const DEFAULT_OBJECT3D: Render3DParams = {
@@ -374,6 +379,71 @@ function downsample(src: Uint8ClampedArray, sw: number, sh: number, factor: numb
   return out;
 }
 
+/** Build a normalized, smooth-shaded Mesh from an imported triangle mesh. */
+function meshFromImported(imported: ImportedMesh): Mesh {
+  let minX = Infinity;
+  let minY = Infinity;
+  let minZ = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  let maxZ = -Infinity;
+  for (const v of imported.vertices) {
+    minX = Math.min(minX, v[0]);
+    minY = Math.min(minY, v[1]);
+    minZ = Math.min(minZ, v[2]);
+    maxX = Math.max(maxX, v[0]);
+    maxY = Math.max(maxY, v[1]);
+    maxZ = Math.max(maxZ, v[2]);
+  }
+  const cx = (minX + maxX) / 2;
+  const cy = (minY + maxY) / 2;
+  const cz = (minZ + maxZ) / 2;
+  const span = Math.max(maxX - minX, maxY - minY, maxZ - minZ, 1e-6);
+  const s = 1 / span;
+  const vertices: Vertex[] = imported.vertices.map((v) => ({
+    x: (v[0] - cx) * s,
+    y: (v[1] - cy) * s,
+    z: (v[2] - cz) * s,
+    nx: 0,
+    ny: 0,
+    nz: 0,
+  }));
+  const triangles = imported.triangles;
+  for (let i = 0; i + 2 < triangles.length; i += 3) {
+    const a = vertices[triangles[i]];
+    const b = vertices[triangles[i + 1]];
+    const c = vertices[triangles[i + 2]];
+    const ux = b.x - a.x;
+    const uy = b.y - a.y;
+    const uz = b.z - a.z;
+    const vx = c.x - a.x;
+    const vy = c.y - a.y;
+    const vz = c.z - a.z;
+    let nx = uy * vz - uz * vy;
+    let ny = uz * vx - ux * vz;
+    let nz = ux * vy - uy * vx;
+    const len = Math.hypot(nx, ny, nz) || 1;
+    nx /= len;
+    ny /= len;
+    nz /= len;
+    for (const idx of [triangles[i], triangles[i + 1], triangles[i + 2]]) {
+      const vtx = vertices[idx];
+      if (vtx) {
+        vtx.nx += nx;
+        vtx.ny += ny;
+        vtx.nz += nz;
+      }
+    }
+  }
+  for (const vtx of vertices) {
+    const len = Math.hypot(vtx.nx, vtx.ny, vtx.nz) || 1;
+    vtx.nx /= len;
+    vtx.ny /= len;
+    vtx.nz /= len;
+  }
+  return { vertices, triangles: triangles.slice() };
+}
+
 /** Render a single primitive with an orthographic camera. */
 export function renderObject3D(
   width: number,
@@ -408,7 +478,7 @@ export function renderObject3D(
   const zoom = Math.max(0.25, Math.min(4, p.zoom || 1));
   const viewH = 2.2 / zoom;
   const scale = h / viewH;
-  const mesh = meshFor(p.primitive);
+  const mesh = p.mesh ? meshFromImported(p.mesh) : meshFor(p.primitive);
   const rx = ((p.rotationX || 0) * Math.PI) / 180;
   const ry = ((p.rotationY || 0) * Math.PI) / 180;
   const rz = ((p.rotationZ || 0) * Math.PI) / 180;
@@ -511,4 +581,21 @@ export function renderObject3D(
 
   if (factor === 1) return { width: w, height: h, data: report };
   return downsample(report, w, h, factor);
+}
+
+/**
+ * The screen-space centre of a 3D object (in pixels, before rotation is applied
+ * around the origin). Used to show an off-screen indicator in the viewer.
+ */
+export function projectedObjectCenter(
+  params: Render3DParams,
+  width: number,
+  height: number,
+): { x: number; y: number } {
+  const zoom = Math.max(0.25, Math.min(4, params.zoom || 1));
+  const viewH = 2.2 / zoom;
+  const offsetX = (params.positionX || 0) * (viewH * 1.4);
+  const offsetY = (params.positionY || 0) * (viewH * 1.4);
+  const scale = height / viewH;
+  return { x: width / 2 + offsetX * scale, y: height / 2 - offsetY * scale };
 }

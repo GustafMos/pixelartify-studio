@@ -27,6 +27,7 @@ import type {
   PostprocessOp,
   PostprocessSettings,
   PreprocessOp,
+  RegionSettings,
   ResolutionSettings,
   VideoSettings,
 } from './types';
@@ -59,8 +60,13 @@ import { DEFAULT_BACKGROUND, renderBackground, type BackgroundParams } from './b
 import { DEFAULT_OBJECT3D, renderObject3D, type Render3DParams } from './render3d';
 import { DEFAULT_MOTION, evaluateMotion, type MotionSettings } from './motion';
 import { renderPixelArt } from './pipeline';
+import { applyMathOp, DEFAULT_MATH, setPath } from './value';
+import { transformImage, transformMask, DEFAULT_TRANSFORM } from './transform';
+import { DEFAULT_REGION } from './region';
+import { renderShape2D, DEFAULT_SHAPE2D } from './shape2d';
+import { renderParticles, DEFAULT_PARTICLES } from './particles';
 
-export type SocketType = 'media' | 'mask' | 'palette' | 'motion';
+export type SocketType = 'media' | 'mask' | 'palette' | 'motion' | 'value';
 
 export interface NodePortDef {
   id: string;
@@ -138,7 +144,10 @@ export const NODE_DEFS: Record<GraphNodeType, NodeDefinition> = {
     description:
       'Painterly, oil, watercolour, displacement, grain, blur, bloom and more. Applied at the canonical working resolution.',
     accent: '#f72585',
-    inputs: [{ id: 'media', label: 'Media', type: 'media' }],
+    inputs: [
+      { id: 'media', label: 'Media', type: 'media' },
+      { id: 'mask', label: 'Mask', type: 'mask', optional: true },
+    ],
     outputs: [{ id: 'media', label: 'Media', type: 'media' }],
   },
   pixelate: {
@@ -266,7 +275,10 @@ export const NODE_DEFS: Record<GraphNodeType, NodeDefinition> = {
     description:
       'Sprite outline, bloom, grain, scanlines, vignette, chromatic aberration, CRT and sharpening.',
     accent: '#ef476f',
-    inputs: [{ id: 'media', label: 'Media', type: 'media' }],
+    inputs: [
+      { id: 'media', label: 'Media', type: 'media' },
+      { id: 'mask', label: 'Mask', type: 'mask', optional: true },
+    ],
     outputs: [{ id: 'media', label: 'Media', type: 'media' }],
   },
   merge: {
@@ -296,6 +308,82 @@ export const NODE_DEFS: Record<GraphNodeType, NodeDefinition> = {
       { id: 'palette', label: 'Palette', type: 'palette' },
     ],
   },
+  constant: {
+    type: 'constant',
+    title: 'Constant',
+    category: 'source',
+    description:
+      'A constant numeric value. Connect its Value output to a driven field, a Math node, or use it to animate a parameter.',
+    accent: '#94a3b8',
+    inputs: [],
+    outputs: [{ id: 'value', label: 'Value', type: 'value' }],
+  },
+  math: {
+    type: 'math',
+    title: 'Math',
+    category: 'source',
+    description:
+      'Combine value inputs with arithmetic. Connect Constant values or driven fields, then route the result into another field.',
+    accent: '#94a3b8',
+    inputs: [{ id: 'values', label: 'Inputs', type: 'value', multiple: true }],
+    outputs: [{ id: 'value', label: 'Value', type: 'value' }],
+  },
+  text: {
+    type: 'text',
+    title: 'Text',
+    category: 'source',
+    description:
+      'Render text over the media or as a standalone image. Font, size, position, colour and outline.',
+    accent: '#8ecae6',
+    inputs: [{ id: 'media', label: 'Media', type: 'media', optional: true }],
+    outputs: [{ id: 'media', label: 'Media', type: 'media' }],
+  },
+  transform: {
+    type: 'transform',
+    title: 'Transform',
+    category: 'process',
+    description:
+      'Translate, rotate, scale and shear the incoming media. Drag the on-canvas gizmo to transform visually.',
+    accent: '#8ecae6',
+    inputs: [{ id: 'media', label: 'Media', type: 'media' }],
+    outputs: [{ id: 'media', label: 'Media', type: 'media' }],
+  },
+  switcher: {
+    type: 'switcher',
+    title: 'Switcher',
+    category: 'process',
+    description:
+      'Routes one of its media inputs downstream. Choose the active input to switch between branches.',
+    accent: '#8ecae6',
+    inputs: [{ id: 'media', label: 'Media', type: 'media', multiple: true }],
+    outputs: [{ id: 'media', label: 'Media', type: 'media' }],
+  },
+  shape2d: {
+    type: 'shape2d',
+    title: 'Shape 2D',
+    category: 'source',
+    description:
+      'Generate a circle, rectangle, triangle, polygon, star or line with solid or gradient fill. Composite it over media or use standalone.',
+    accent: '#8ecae6',
+    inputs: [
+      { id: 'media', label: 'Media', type: 'media', optional: true },
+      { id: 'motion', label: 'Motion', type: 'motion', optional: true },
+    ],
+    outputs: [{ id: 'media', label: 'Media', type: 'media' }],
+  },
+  particles: {
+    type: 'particles',
+    title: 'Particles',
+    category: 'source',
+    description:
+      'Spawn a deterministic field of dust, rain, shimmer or custom particles. Animates over time; composite it over media or use standalone.',
+    accent: '#8ecae6',
+    inputs: [
+      { id: 'media', label: 'Media', type: 'media', optional: true },
+      { id: 'motion', label: 'Motion', type: 'motion', optional: true },
+    ],
+    outputs: [{ id: 'media', label: 'Media', type: 'media' }],
+  },
   group: {
     type: 'group',
     title: 'Group',
@@ -317,6 +405,21 @@ export const NODE_DEFS: Record<GraphNodeType, NodeDefinition> = {
     outputs: [{ id: 'media', label: 'Media', type: 'media' }],
   },
 };
+
+/**
+ * Every node with numeric parameters accepts a `value` input so any of its
+ * fields can be driven by a Constant or Math node. The port is hidden in the
+ * graph view until a connection is made (see GraphCanvas).
+ */
+const VALUE_PORT: NodePortDef = { id: 'value', label: 'Value', type: 'value', multiple: true, optional: true };
+const DRIVABLE_NODES: GraphNodeType[] = [
+  'crop', 'resize', 'channels', 'color', 'preprocess', 'pixelate', 'palette',
+  'dither', 'extract', 'compose', 'background', 'object3d', 'animate',
+  'timeline', 'retime', 'postprocess', 'text', 'transform', 'output',
+];
+for (const type of DRIVABLE_NODES) {
+  NODE_DEFS[type].inputs.push(VALUE_PORT);
+}
 
 /* -------------------------------------------------------------------------- */
 /* Runtime types                                                              */
@@ -399,7 +502,8 @@ export type GraphValue =
   | { type: 'media'; items: GraphMediaItem[] }
   | { type: 'mask'; items: GraphMaskItem[] }
   | { type: 'palette'; items: GraphPaletteItem[] }
-  | { type: 'motion'; settings: MotionSettings };
+  | { type: 'motion'; settings: MotionSettings }
+  | { type: 'value'; value: number };
 
 export interface GraphError {
   nodeId?: string;
@@ -423,7 +527,16 @@ export interface EvaluateOptions {
   time?: number;
   /** Cap generated background/3D source dimensions during fast preview. */
   maxGeneratedSide?: number;
+  /** Canvas-based text renderer (browser only) for the Text node. */
+  textRenderer?: TextRenderer;
 }
+
+/** Renders a text layer at the given size, or null when unavailable. */
+export type TextRenderer = (
+  params: Record<string, unknown>,
+  width: number,
+  height: number,
+) => PixelImage | null;
 
 /* -------------------------------------------------------------------------- */
 /* Node creation & defaults                                                   */
@@ -451,7 +564,7 @@ export function nodeParams(type: GraphNodeType, settings?: PixelArtifySettings):
     case 'color':
       return { color: deepClone(DEFAULT_COLOR_CORRECTION) };
     case 'preprocess':
-      return { ops: deepClone(s.preprocess.ops) };
+      return { ops: deepClone(s.preprocess.ops), region: deepClone(DEFAULT_REGION) };
     case 'pixelate':
       return { resolution: deepClone(s.resolution), pixelate: deepClone(s.pixelate) };
     case 'palette':
@@ -484,11 +597,46 @@ export function nodeParams(type: GraphNodeType, settings?: PixelArtifySettings):
     case 'group':
       return { nodeIds: [], expanded: false };
     case 'postprocess':
-      return { postprocess: deepClone(s.postprocess) };
+      return { postprocess: deepClone(s.postprocess), region: deepClone(DEFAULT_REGION) };
     case 'merge':
       return {};
     case 'router':
       return {};
+    case 'constant':
+      return { value: 0 };
+    case 'math':
+      return { ...deepClone(DEFAULT_MATH) };
+    case 'text':
+      return {
+        text: 'PIXELART',
+        x: 0.5,
+        y: 0.5,
+        size: 48,
+        color: '#ffffff',
+        outline: 0,
+        font: 'monospace',
+        align: 'center',
+        alpha: 1,
+      };
+    case 'transform':
+      return {
+        x: 0,
+        y: 0,
+        rotation: 0,
+        scaleX: 1,
+        scaleY: 1,
+        shearX: 0,
+        shearY: 0,
+        pivotX: 0.5,
+        pivotY: 0.5,
+        unit: 'art',
+      };
+    case 'switcher':
+      return { activeIndex: 0 };
+    case 'shape2d':
+      return { ...deepClone(DEFAULT_SHAPE2D) };
+    case 'particles':
+      return { ...deepClone(DEFAULT_PARTICLES) };
     case 'output':
       return { output: deepClone(s.output), video: deepClone(s.video), label: 'Output' };
     default:
@@ -572,6 +720,25 @@ export function createDefaultGraph(settings?: PixelArtifySettings, name = 'Pixel
     { id: 'e-post-out', fromNode: ids.post, fromPort: 'media', toNode: ids.output, toPort: 'media' },
   ];
   return { id: `graph-${Math.random().toString(36).slice(2, 8)}`, name, description: '', nodes, edges };
+}
+
+/**
+ * A minimal pass-through graph: Media input → Output, with no processing.
+ * The source flows through unchanged until the user adds nodes.
+ */
+export function createCleanSlateGraph(settings?: PixelArtifySettings): PipelineGraph {
+  const s = settings ?? defaultSettings();
+  const input = { ...createNode('input', 40, 40, { label: 'Media' }, s), id: 'input-main' };
+  const output = { ...createNode('output', 380, 40, nodeParams('output', s), s), id: 'output-main' };
+  return {
+    id: `graph-${Math.random().toString(36).slice(2, 8)}`,
+    name: 'Clean Slate',
+    description: '',
+    nodes: [input, output],
+    edges: [
+      { id: 'e-in-out', fromNode: input.id, fromPort: 'media', toNode: output.id, toPort: 'media' },
+    ],
+  };
 }
 
 export function createLayeredGraph(settings?: PixelArtifySettings): PipelineGraph {
@@ -764,7 +931,7 @@ export function evaluateGraph(graph: PipelineGraph, options: EvaluateOptions): G
     }
 
     try {
-      const outputs = evaluateNode(node, inputs, options);
+      const outputs = evaluateNode(resolveDrivenNode(node, values), inputs, options);
       if (outputs) values.set(nodeId, outputs);
     } catch (err) {
       errors.push({ nodeId, message: err instanceof Error ? err.message : String(err) });
@@ -772,6 +939,27 @@ export function evaluateGraph(graph: PipelineGraph, options: EvaluateOptions): G
   }
 
   return { values, errors, order };
+}
+
+/**
+ * Override any fields driven by a Constant/Math node before a node evaluates,
+ * so the node sees the connected value rather than its stored literal. The
+ * `drivers` map on node.params stores `fieldPath -> source node id`.
+ */
+function resolveDrivenNode(
+  node: GraphNode,
+  values: Map<string, Record<string, GraphValue>>,
+): GraphNode {
+  const drivers = node.params.drivers as Record<string, string> | undefined;
+  if (!drivers || Object.keys(drivers).length === 0) return node;
+  let params = node.params;
+  for (const [path, sourceId] of Object.entries(drivers)) {
+    const out = values.get(sourceId)?.value;
+    if (out && out.type === 'value') {
+      params = setPath(params, path, out.value) as Record<string, unknown>;
+    }
+  }
+  return params === node.params ? node : { ...node, params };
 }
 
 function evaluateNode(
@@ -851,12 +1039,21 @@ function evaluateNode(
     }
     case 'preprocess': {
       if (!media) return null;
-      const ops = toOps(node.params.ops);
+      const region = (node.params.region as RegionSettings | undefined) ?? deepClone(DEFAULT_REGION);
+      const maskValue = inputs.get('mask')?.[0];
+      const maskId =
+        maskValue && maskValue.type === 'mask' ? maskValue.items[0]?.maskId : undefined;
+      const ops = toOps(node.params.ops).map((op) => ({
+        ...op,
+        region: deepClone(region),
+        maskId,
+      }));
       return {
         media: {
           type: 'media',
           items: media.items.map((item) => ({
             ...item,
+            masks: mergeMaskInputs(item, maskValue),
             preprocessOps: [...item.preprocessOps, ...deepClone(ops)],
           })),
         },
@@ -1087,14 +1284,18 @@ function evaluateNode(
         media: {
           type: 'media',
           items: media.items.map((item) => {
-            const base = bakeGeneratorInput(item);
-            const backdrop = renderBackground(base.sourceWidth, base.sourceHeight, params);
-            const underlay = base.underlay ? compositeOver(backdrop, base.underlay) : backdrop;
-            return {
-              ...base,
-              source: compositeOver(backdrop, base.source),
-              underlay,
-            };
+            if (item.kind === 'image') {
+              const base = bakeGeneratorInput(item);
+              const backdrop = renderBackground(base.sourceWidth, base.sourceHeight, params);
+              const underlay = base.underlay ? compositeOver(backdrop, base.underlay) : backdrop;
+              return { ...base, source: compositeOver(backdrop, base.source), underlay };
+            }
+            // Video frames decode live, so the backdrop is composited by the
+            // render pipeline at art resolution instead of baked here.
+            const size = generatorOverlaySize(item);
+            const backdrop = renderBackground(size.width, size.height, params);
+            const underlay = item.underlay ? compositeOver(backdrop, item.underlay) : backdrop;
+            return { ...item, underlay };
           }),
         },
       };
@@ -1140,44 +1341,110 @@ function evaluateNode(
         media: {
           type: 'media',
           items: media.items.map((item) => {
-            const base = bakeGeneratorInput(item);
-            // With an input the object is an overlay, so a solid background
-            // would hide the source. The Background node handles backdrops.
-            let width = base.sourceWidth;
-            let height = base.sourceHeight;
+            if (item.kind === 'image') {
+              // With an input the object is an overlay, so a solid background
+              // would hide the source. The Background node handles backdrops.
+              const base = bakeGeneratorInput(item);
+              let width = base.sourceWidth;
+              let height = base.sourceHeight;
+              const cap = options.maxGeneratedSide;
+              if (cap && Math.max(width, height) > cap) {
+                const scale = cap / Math.max(width, height);
+                width = Math.max(2, Math.round(width * scale));
+                height = Math.max(2, Math.round(height * scale));
+              }
+              let object = renderObject3D(width, height, { ...params, background: 'transparent' });
+              if (width !== base.sourceWidth || height !== base.sourceHeight) {
+                object = resizeImage(object, base.sourceWidth, base.sourceHeight, 'nearest');
+              }
+              const overlay = base.overlay ? compositeOver(base.overlay, object) : object;
+              return { ...base, source: compositeOver(base.source, object), overlay };
+            }
+            // Video: the object is composited by the render pipeline at art
+            // resolution, after the live frame has been pixelated.
+            const size = generatorOverlaySize(item);
             const cap = options.maxGeneratedSide;
+            let width = size.width;
+            let height = size.height;
             if (cap && Math.max(width, height) > cap) {
               const scale = cap / Math.max(width, height);
               width = Math.max(2, Math.round(width * scale));
               height = Math.max(2, Math.round(height * scale));
             }
-            let object = renderObject3D(width, height, {
-              ...params,
-              background: 'transparent',
-            });
-            if (width !== base.sourceWidth || height !== base.sourceHeight) {
-              object = resizeImage(object, base.sourceWidth, base.sourceHeight, 'nearest');
+            let object = renderObject3D(width, height, { ...params, background: 'transparent' });
+            if (width !== size.width || height !== size.height) {
+              object = resizeImage(object, size.width, size.height, 'nearest');
             }
-            const overlay = base.overlay ? compositeOver(base.overlay, object) : object;
-            return {
-              ...base,
-              source: compositeOver(base.source, object),
-              overlay,
-            };
+            const overlay = item.overlay ? compositeOver(item.overlay, object) : object;
+            return { ...item, overlay };
           }),
         },
+      };
+    }
+    case 'shape2d': {
+      const params = { ...deepClone(DEFAULT_SHAPE2D), ...(node.params as Partial<typeof DEFAULT_SHAPE2D>) };
+      if (motion) {
+        params.positionX += motion.x * 0.5;
+        params.positionY += motion.y * 0.5;
+        params.rotation += motion.rotationZ;
+        params.scale *= motion.scale;
+      }
+      if (!media) {
+        let width = Math.max(2, Math.round(params.width));
+        let height = Math.max(2, Math.round(params.height));
+        const cap = options.maxGeneratedSide;
+        if (cap && Math.max(width, height) > cap) {
+          const s = cap / Math.max(width, height);
+          width = Math.max(2, Math.round(width * s));
+          height = Math.max(2, Math.round(height * s));
+        }
+        const image = renderShape2D(width, height, params);
+        return {
+          media: { type: 'media', items: [makeGeneratedItem(node, image, 'Shape 2D', options.time ?? 0)] },
+        };
+      }
+      return { media: compositeGeneratedOverMedia(media, options, (w, h) => renderShape2D(w, h, params)) };
+    }
+    case 'particles': {
+      const params = { ...deepClone(DEFAULT_PARTICLES), ...(node.params as Partial<typeof DEFAULT_PARTICLES>) };
+      if (motion) {
+        params.direction += motion.rotationZ;
+        params.opacity = Math.max(0, Math.min(1, params.opacity + (motion.scale - 1)));
+      }
+      if (!media) {
+        let width = Math.max(2, Math.round(params.width));
+        let height = Math.max(2, Math.round(params.height));
+        const cap = options.maxGeneratedSide;
+        if (cap && Math.max(width, height) > cap) {
+          const s = cap / Math.max(width, height);
+          width = Math.max(2, Math.round(width * s));
+          height = Math.max(2, Math.round(height * s));
+        }
+        const image = renderParticles(width, height, params, options.time ?? 0);
+        return {
+          media: { type: 'media', items: [makeGeneratedItem(node, image, 'Particles', options.time ?? 0)] },
+        };
+      }
+      return {
+        media: compositeGeneratedOverMedia(media, options, (w, h) => renderParticles(w, h, params, options.time ?? 0)),
       };
     }
     case 'postprocess': {
       if (!media) return null;
       const post = (node.params.postprocess as PostprocessSettings) ?? { ops: [], lockPalette: false };
+      const region = (node.params.region as RegionSettings | undefined) ?? deepClone(DEFAULT_REGION);
+      const maskValue = inputs.get('mask')?.[0];
+      const maskId =
+        maskValue && maskValue.type === 'mask' ? maskValue.items[0]?.maskId : undefined;
+      const ops = deepClone(post.ops).map((op) => ({ ...op, region: deepClone(region), maskId }));
       return {
         media: {
           type: 'media',
           items: media.items.map((item) => ({
             ...item,
+            masks: mergeMaskInputs(item, maskValue),
             postprocess: {
-              ops: [...item.postprocess.ops, ...deepClone(post.ops)],
+              ops: [...item.postprocess.ops, ...ops],
               lockPalette: post.lockPalette || item.postprocess.lockPalette,
             },
           })),
@@ -1188,6 +1455,22 @@ function evaluateNode(
       const list = inputs.get('media') ?? [];
       const items = list.flatMap((v) => (v.type === 'media' ? v.items : []));
       return { media: { type: 'media', items } };
+    }
+    case 'switcher': {
+      const list = inputs.get('media') ?? [];
+      const mediaValues = list.filter(
+        (v): v is Extract<GraphValue, { type: 'media' }> => v.type === 'media',
+      );
+      const index = Math.max(
+        0,
+        Math.min(mediaValues.length - 1, Number(node.params.activeIndex ?? 0) || 0),
+      );
+      return {
+        media: {
+          type: 'media',
+          items: mediaValues.length > 0 ? mediaValues[index].items : [],
+        },
+      };
     }
     case 'router': {
       const out: Record<string, GraphValue> = {};
@@ -1204,6 +1487,63 @@ function evaluateNode(
       );
       if (palette) out.palette = palette;
       return out;
+    }
+    case 'constant': {
+      const value = Number(node.params.value);
+      return { value: { type: 'value', value: Number.isFinite(value) ? value : 0 } };
+    }
+    case 'math': {
+      const operation = (node.params.operation as string) ?? DEFAULT_MATH.operation;
+      const valueInputs = inputs.get('values') ?? [];
+      const values = valueInputs
+        .filter((v): v is Extract<GraphValue, { type: 'value' }> => v.type === 'value')
+        .map((v) => v.value);
+      const result = applyMathOp(operation as Parameters<typeof applyMathOp>[0], values, node.params);
+      return { value: { type: 'value', value: Number.isFinite(result) ? result : 0 } };
+    }
+    case 'text': {
+      const renderer = options.textRenderer;
+      if (media) {
+        return {
+          media: {
+            type: 'media',
+            items: media.items.map((item) => {
+              if (!renderer) return item;
+              const layer = renderer(node.params, item.sourceWidth, item.sourceHeight);
+              if (!layer) return item;
+              return { ...item, source: compositeOver(item.source, layer) };
+            }),
+          },
+        };
+      }
+      if (!renderer) return null;
+      const width = Math.max(2, Math.round(Number(node.params.width ?? 480)));
+      const height = Math.max(2, Math.round(Number(node.params.height ?? 270)));
+      const image = renderer(node.params, width, height);
+      if (!image) return null;
+      return {
+        media: {
+          type: 'media',
+          items: [makeGeneratedItem(node, image, 'Text', options.time ?? 0)],
+        },
+      };
+    }
+    case 'transform': {
+      if (!media) return null;
+      const params = { ...DEFAULT_TRANSFORM, ...(node.params as Partial<typeof DEFAULT_TRANSFORM>) };
+      return {
+        media: {
+          type: 'media',
+          items: media.items.map((item) => {
+            const source = transformImage(item.source, params);
+            const masks: Record<string, MaskData> = {};
+            for (const [id, mask] of Object.entries(item.masks)) {
+              masks[id] = transformMask(mask, params);
+            }
+            return { ...item, source, masks };
+          }),
+        },
+      };
     }
     case 'output': {
       return media ? { media: { type: 'media', items: media.items } } : null;
@@ -1290,10 +1630,9 @@ export function applyTrackedAlphaCuts(
       if (mask) multiplyAlpha(out, mask);
     }
   }
-  // Generated scene layers are static, so they are baked into `item.source`
-  // for stills. Live video frames arrive separately and need them reapplied.
-  if (item.underlay) out = compositeOver(item.underlay, out);
-  if (item.overlay) out = compositeOver(out, item.overlay);
+  // Underlay/overlay are composited by the render pipeline (after pixelation,
+  // palette and dither), never here — otherwise generated layers would be
+  // re-processed as if they were part of the source.
   return out;
 }
 
@@ -1456,19 +1795,12 @@ function hasAccumulatedProcessing(item: GraphMediaItem): boolean {
 }
 
 /**
- * Generators (Background, 3D object) sit at a specific point in the graph.
- * Upstream processing must be baked in before the generated pixels are added;
- * otherwise the output pipeline re-applies those upstream settings to the
- * generated pixels and a 3D object added near the end gets pixelated, dithered
- * and post-processed by nodes that came before it.
- *
- * After baking, the item starts a fresh downstream stage. Palette, dither,
- * pixelate and effects nodes that come *after* the generator set their flags
- * again and therefore still apply normally.
+ * For still images, bake the upstream processing into the item's source before
+ * a generator composites its layer on top, then start a fresh downstream stage.
+ * This keeps upstream nodes from re-processing the generated pixels while still
+ * letting downstream nodes (palette, dither, post) apply normally.
  */
 function bakeGeneratorInput(item: GraphMediaItem): GraphMediaItem {
-  // Video frames are decoded live; baking a still frame here would make the
-  // playback path diverge from the graph. Keep video behaviour as before.
   if (item.kind !== 'image' || !hasAccumulatedProcessing(item)) return item;
   try {
     const result = renderPixelArt(
@@ -1504,6 +1836,61 @@ function bakeGeneratorInput(item: GraphMediaItem): GraphMediaItem {
     console.warn('PixelArtify: could not bake upstream processing for a generator.', err);
     return item;
   }
+}
+
+/**
+ * The art-resolution size a generator should render its layer at, so the
+ * render pipeline can composite it cleanly after pixelation (video path).
+ */
+function generatorOverlaySize(item: GraphMediaItem): { width: number; height: number } {
+  if (item.pixelateEnabled) {
+    const art = computeArtSize(item.sourceWidth, item.sourceHeight, item.resolution);
+    return { width: Math.max(1, art.width), height: Math.max(1, art.height) };
+  }
+  return { width: item.sourceWidth, height: item.sourceHeight };
+}
+
+/**
+ * Composite a generated layer (shape/particles) over media items. Still images
+ * bake the upstream processing first; video defers the compositing to the
+ * render pipeline at art resolution.
+ */
+function compositeGeneratedOverMedia(
+  media: { type: 'media'; items: GraphMediaItem[] },
+  options: EvaluateOptions,
+  render: (width: number, height: number) => PixelImage,
+): { type: 'media'; items: GraphMediaItem[] } {
+  return {
+    type: 'media',
+    items: media.items.map((item) => {
+      const cap = options.maxGeneratedSide;
+      const capSize = (width: number, height: number): [number, number] => {
+        if (cap && Math.max(width, height) > cap) {
+          const s = cap / Math.max(width, height);
+          return [Math.max(2, Math.round(width * s)), Math.max(2, Math.round(height * s))];
+        }
+        return [width, height];
+      };
+      if (item.kind === 'image') {
+        const base = bakeGeneratorInput(item);
+        const [width, height] = capSize(base.sourceWidth, base.sourceHeight);
+        let layer = render(width, height);
+        if (width !== base.sourceWidth || height !== base.sourceHeight) {
+          layer = resizeImage(layer, base.sourceWidth, base.sourceHeight, 'nearest');
+        }
+        const overlay = base.overlay ? compositeOver(base.overlay, layer) : layer;
+        return { ...base, source: compositeOver(base.source, layer), overlay };
+      }
+      const size = generatorOverlaySize(item);
+      const [width, height] = capSize(size.width, size.height);
+      let layer = render(width, height);
+      if (width !== size.width || height !== size.height) {
+        layer = resizeImage(layer, size.width, size.height, 'nearest');
+      }
+      const overlay = item.overlay ? compositeOver(item.overlay, layer) : layer;
+      return { ...item, overlay };
+    }),
+  };
 }
 
 /** Wrap an image produced by a generator node (background, 3D object). */
@@ -1578,6 +1965,16 @@ function makeItem(node: GraphNode, asset: GraphAsset): GraphMediaItem {
 
 function toOps(value: unknown): PreprocessOp[] {
   return Array.isArray(value) ? (value as PreprocessOp[]) : [];
+}
+
+/** Merge masks from a connected mask input into an item's mask map. */
+function mergeMaskInputs(item: GraphMediaItem, maskValue: GraphValue | undefined): Record<string, MaskData> {
+  if (!maskValue || maskValue.type !== 'mask') return item.masks;
+  const out = { ...item.masks };
+  for (const m of maskValue.items) {
+    if (m.assetId === item.assetId || m.assetKey === item.key) out[m.maskId] = m.mask;
+  }
+  return out;
 }
 
 /* -------------------------------------------------------------------------- */

@@ -35,14 +35,14 @@ export interface MotionSettings {
 export const DEFAULT_MOTION: MotionSettings = {
   duration: 4,
   fps: 24,
-  loop: false,
+  loop: true,
   wrap: 'horizontal',
   wrapWidth: 2,
   x: '0',
-  y: '0',
+  y: 'sin(lt * tau / duration) * 0.18',
   z: '0',
-  rotationX: 'sin(t * 1.5) * 12',
-  rotationY: 't * 60',
+  rotationX: 'sin(lt * tau / duration) * 12',
+  rotationY: 'lt * 360 / duration',
   rotationZ: '0',
   scale: '1',
 };

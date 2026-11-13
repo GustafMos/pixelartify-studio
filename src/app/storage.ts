@@ -115,3 +115,14 @@ export function saveUiMode(mode: UiMode): void {
   saveJSON('mode', mode);
 }
 
+export type ColorSpaceOption = 'srgb' | 'display-p3';
+
+export function loadColorSpace(): ColorSpaceOption {
+  const cs = loadJSON<ColorSpaceOption>('colorSpace', 'srgb');
+  return cs === 'display-p3' ? 'display-p3' : 'srgb';
+}
+
+export function saveColorSpace(colorSpace: ColorSpaceOption): void {
+  saveJSON('colorSpace', colorSpace);
+}
+

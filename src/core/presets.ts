@@ -292,7 +292,7 @@ export const BUILTIN_PRESETS: Preset[] = [
         fps: 12,
         start: 0,
         end: null,
-        output: 'both',
+        output: 'video',
         codec: 'avc',
         bitrateMbps: 8,
         spritesheet: { columns: 0, padding: 0, maxSize: 2048, powerOfTwo: false, split: true },

@@ -2,7 +2,8 @@ import React from 'react';
 import type { GraphNode, PixelateSettings, ResolutionSettings } from '../../../core/types';
 import { DEFAULT_PIXELATE, computeArtSize, describeResolution, DEFAULT_RESOLUTION } from '../../../core';
 import { useStudio } from '../../store';
-import { Section, Segmented, SelectField, Slider, Toggle, NumberField, Badge } from '../controls';
+import { Section, Segmented, SelectField, Toggle, Badge } from '../controls';
+import { Field } from '../Field';
 import { Icon } from '../icons';
 
 const RESOLUTION_MODES = [
@@ -27,6 +28,14 @@ export function PixelatePanel({ node }: { node: GraphNode }): React.ReactElement
 
   const valueMax = resolution.mode === 'block-size' ? 32 : 1080;
   const valueMin = resolution.mode === 'block-size' ? 1 : 16;
+  const valueLabel =
+    resolution.mode === 'block-size'
+      ? 'Source pixels per art pixel'
+      : resolution.mode === 'fixed-height'
+        ? 'Art height'
+        : resolution.mode === 'fixed-width'
+          ? 'Art width'
+          : 'Short side';
 
   return (
     <div className="inspector-panel">
@@ -57,32 +66,17 @@ export function PixelatePanel({ node }: { node: GraphNode }): React.ReactElement
           options={RESOLUTION_MODES.map((m) => ({ value: m.value, label: m.label }))}
           onChange={(v) => setRes({ mode: v })}
         />
-        <Slider
-          label={
-            resolution.mode === 'block-size'
-              ? 'Source pixels per art pixel'
-              : resolution.mode === 'fixed-height'
-                ? 'Art height'
-                : resolution.mode === 'fixed-width'
-                  ? 'Art width'
-                  : 'Short side'
-          }
-          value={resolution.value}
+        <Field
+          node={node}
+          path="resolution.value"
+          label={valueLabel}
           min={valueMin}
           max={valueMax}
           step={1}
           unit="px"
-          onChange={(v) => setRes({ value: v })}
+          defaultValue={270}
         />
-        <Slider
-          label="Export scale"
-          value={resolution.exportScale}
-          min={1}
-          max={8}
-          step={1}
-          unit="×"
-          onChange={(v) => setRes({ exportScale: v })}
-        />
+        <Field node={node} path="resolution.exportScale" label="Export scale" min={1} max={8} step={1} unit="×" defaultValue={4} />
         <Toggle
           label="Even output dimensions"
           checked={resolution.snapEven}
@@ -90,8 +84,8 @@ export function PixelatePanel({ node }: { node: GraphNode }): React.ReactElement
           hint="Recommended for H.264 video and many game engines."
         />
         <div className="two-col">
-          <NumberField label="Min side" value={resolution.minSide} min={2} max={512} onChange={(v) => setRes({ minSide: v })} />
-          <NumberField label="Max side" value={resolution.maxSide} min={64} max={4096} onChange={(v) => setRes({ maxSide: v })} />
+          <Field node={node} path="resolution.minSide" label="Min side" min={2} max={512} step={1} kind="number" defaultValue={2} />
+          <Field node={node} path="resolution.maxSide" label="Max side" min={64} max={4096} step={1} kind="number" defaultValue={4096} />
         </div>
         <p className="micro-copy">{describeResolution(art)}</p>
       </Section>
@@ -103,12 +97,12 @@ export function PixelatePanel({ node }: { node: GraphNode }): React.ReactElement
           onChange={(v) => setPix({ edgeAware: v })}
           hint="Searches for sampling windows that avoid cutting through strong edges."
         />
-        <Slider label="Edge alignment" value={pixelate.alignment} min={0} max={1} step={0.01} onChange={(v) => setPix({ alignment: v })} disabled={!pixelate.edgeAware} />
-        <Slider label="Colour blend" value={pixelate.colorBlend} min={0} max={1} step={0.01} onChange={(v) => setPix({ colorBlend: v })} hint="0 = area average, 1 = dominant local colour." />
-        <Slider label="Edge sensitivity" value={pixelate.edgeThreshold} min={0} max={1} step={0.01} onChange={(v) => setPix({ edgeThreshold: v })} disabled={!pixelate.edgeAware} />
-        <Slider label="Smoothing passes" value={pixelate.gridPasses} min={0} max={4} step={1} onChange={(v) => setPix({ gridPasses: v })} disabled={!pixelate.edgeAware} />
-        <Slider label="Pre-blur" value={pixelate.preBlur} min={0} max={3} step={0.05} unit="art px" onChange={(v) => setPix({ preBlur: v })} />
-        <Slider label="Post sharpen" value={pixelate.postSharpen} min={0} max={1} step={0.01} onChange={(v) => setPix({ postSharpen: v })} />
+        <Field node={node} path="pixelate.alignment" label="Edge alignment" min={0} max={1} step={0.01} defaultValue={DEFAULT_PIXELATE.alignment} />
+        <Field node={node} path="pixelate.colorBlend" label="Colour blend" min={0} max={1} step={0.01} defaultValue={DEFAULT_PIXELATE.colorBlend} hint="0 = area average, 1 = dominant local colour." />
+        <Field node={node} path="pixelate.edgeThreshold" label="Edge sensitivity" min={0} max={1} step={0.01} defaultValue={DEFAULT_PIXELATE.edgeThreshold} />
+        <Field node={node} path="pixelate.gridPasses" label="Smoothing passes" min={0} max={4} step={1} defaultValue={DEFAULT_PIXELATE.gridPasses} />
+        <Field node={node} path="pixelate.preBlur" label="Pre-blur" min={0} max={3} step={0.05} unit="art px" defaultValue={DEFAULT_PIXELATE.preBlur} />
+        <Field node={node} path="pixelate.postSharpen" label="Post sharpen" min={0} max={1} step={0.01} defaultValue={DEFAULT_PIXELATE.postSharpen} />
         <p className="micro-copy">
           The sampler runs at a canonical supersampled resolution derived from the art size, so 480p and
           1080p sources share the same pixel grid and feature scale.
@@ -116,12 +110,12 @@ export function PixelatePanel({ node }: { node: GraphNode }): React.ReactElement
       </Section>
 
       <Section title="Tone & colour" defaultOpen={false}>
-        <Slider label="Contrast" value={pixelate.contrast} min={0.5} max={2} step={0.01} onChange={(v) => setPix({ contrast: v })} />
-        <Slider label="Brightness" value={pixelate.brightness} min={-0.5} max={0.5} step={0.01} onChange={(v) => setPix({ brightness: v })} />
-        <Slider label="Saturation" value={pixelate.saturation} min={0} max={2} step={0.01} onChange={(v) => setPix({ saturation: v })} />
-        <Slider label="Gamma" value={pixelate.gamma} min={0.4} max={2.5} step={0.01} onChange={(v) => setPix({ gamma: v })} />
-        <Slider label="Hue shift" value={pixelate.hueShift} min={-180} max={180} step={1} unit="°" onChange={(v) => setPix({ hueShift: v })} />
-        <Slider label="Alpha threshold" value={pixelate.alphaThreshold} min={0} max={1} step={0.01} onChange={(v) => setPix({ alphaThreshold: v })} />
+        <Field node={node} path="pixelate.contrast" label="Contrast" min={0.5} max={2} step={0.01} defaultValue={DEFAULT_PIXELATE.contrast} />
+        <Field node={node} path="pixelate.brightness" label="Brightness" min={-0.5} max={0.5} step={0.01} defaultValue={DEFAULT_PIXELATE.brightness} />
+        <Field node={node} path="pixelate.saturation" label="Saturation" min={0} max={2} step={0.01} defaultValue={DEFAULT_PIXELATE.saturation} />
+        <Field node={node} path="pixelate.gamma" label="Gamma" min={0.4} max={2.5} step={0.01} defaultValue={DEFAULT_PIXELATE.gamma} />
+        <Field node={node} path="pixelate.hueShift" label="Hue shift" min={-180} max={180} step={1} unit="°" defaultValue={DEFAULT_PIXELATE.hueShift} />
+        <Field node={node} path="pixelate.alphaThreshold" label="Alpha threshold" min={0} max={1} step={0.01} defaultValue={DEFAULT_PIXELATE.alphaThreshold} />
         <button
           type="button"
           className="ghost-btn small"

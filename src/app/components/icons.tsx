@@ -45,7 +45,13 @@ type IconName =
   | 'cube'
   | 'wave'
   | 'clock'
-  | 'gauge';
+  | 'gauge'
+  | 'pin'
+  | 'text'
+  | 'hash'
+  | 'func'
+  | 'move'
+  | 'shape';
 
 const PATHS: Record<IconName, React.ReactNode> = {
   image: (
@@ -227,6 +233,17 @@ const PATHS: Record<IconName, React.ReactNode> = {
       <path d="M4 18a8 8 0 1 1 16 0" />
       <path d="m12 14 4-4" />
       <circle cx="12" cy="14" r="1.5" />
+    </>
+  ),
+  pin: <path d="M9 3h6l1 6 3 2v1H5v-1l3-2 1-6zM12 12v9" />,
+  text: <path d="M5 5h14M12 5v14" />,
+  hash: <path d="M9 4 7 20M17 4l-2 16M4 9h16M4 15h16" />,
+  func: <path d="M18 5H7l6 7-6 7h11" />,
+  move: <path d="M12 2v20M2 12h20M7 7l5-5 5 5M7 17l5 5 5-5" />,
+  shape: (
+    <>
+      <circle cx="12" cy="12" r="7" />
+      <rect x="4" y="16" width="10" height="5" rx="1" />
     </>
   ),
 };

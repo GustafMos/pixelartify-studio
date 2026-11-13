@@ -21,6 +21,13 @@ import {
   RetimePanel,
   TimelinePanel,
 } from './inspectors/ScenePanels';
+import {
+  ConstantPanel,
+  MathPanel,
+  TextPanel,
+  TransformPanel,
+} from './inspectors/ValuePanels';
+import { Shape2DPanel, ParticlesPanel } from './inspectors/ShapePanels';
 import { ConnectionsPanel } from './ConnectionsPanel';
 
 export function Inspector(): React.ReactElement {
@@ -159,6 +166,20 @@ function renderPanel(node: GraphNode): React.ReactElement {
       return <MergePanel node={node} />;
     case 'router':
       return <RouterPanel node={node} />;
+    case 'constant':
+      return <ConstantPanel node={node} />;
+    case 'math':
+      return <MathPanel node={node} />;
+    case 'text':
+      return <TextPanel node={node} />;
+    case 'transform':
+      return <TransformPanel node={node} />;
+    case 'switcher':
+      return <SwitcherPanel node={node} />;
+    case 'shape2d':
+      return <Shape2DPanel node={node} />;
+    case 'particles':
+      return <ParticlesPanel node={node} />;
     default:
       return <div />;
   }
@@ -243,6 +264,44 @@ function MergePanel({ node }: { node: GraphNode }): React.ReactElement {
   );
 }
 
+function SwitcherPanel({ node }: { node: GraphNode }): React.ReactElement {
+  const { graph, updateNodeParams } = useStudio();
+  const inputs = graph.edges.filter((e) => e.toNode === node.id && e.toPort === 'media');
+  const active = Math.max(0, Math.min(inputs.length - 1, Number(node.params.activeIndex ?? 0) || 0));
+  return (
+    <div className="inspector-panel">
+      <div className="stat-strip">
+        <div>
+          <span>Connected inputs</span>
+          <strong>{inputs.length}</strong>
+        </div>
+        <div>
+          <span>Active</span>
+          <strong>#{active + 1}</strong>
+        </div>
+      </div>
+      <div className="btn-column">
+        {inputs.map((edge, i) => {
+          const from = graph.nodes.find((n) => n.id === edge.fromNode);
+          return (
+            <button
+              key={edge.id}
+              type="button"
+              className={`ghost-btn small ${i === active ? 'is-active' : ''}`}
+              onClick={() => updateNodeParams(node.id, { activeIndex: i })}
+            >
+              <Icon name="link" size={13} /> {i + 1}. {from?.title ?? edge.fromNode}
+            </button>
+          );
+        })}
+      </div>
+      {inputs.length === 0 ? (
+        <p className="micro-copy">Connect two or more media branches to switch between them.</p>
+      ) : null}
+    </div>
+  );
+}
+
 function RouterPanel({ node }: { node: GraphNode }): React.ReactElement {
   const { graph } = useStudio();
   const inputs = graph.edges.filter((e) => e.toNode === node.id);
@@ -312,6 +371,13 @@ function nodeIcon(type: GraphNode['type']): Parameters<typeof Icon>[0]['name'] {
     postprocess: 'settings',
     merge: 'link',
     router: 'link',
+    constant: 'hash',
+    math: 'func',
+    text: 'text',
+    transform: 'move',
+    switcher: 'link',
+    shape2d: 'shape',
+    particles: 'sparkles',
     output: 'download',
   };
   return map[type];

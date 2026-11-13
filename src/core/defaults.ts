@@ -91,7 +91,7 @@ export const DEFAULT_VIDEO: VideoSettings = {
   fps: 24,
   start: 0,
   end: null,
-  output: 'both',
+  output: 'video',
   codec: 'avc',
   bitrateMbps: 10,
   spritesheet: {

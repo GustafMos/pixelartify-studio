@@ -879,11 +879,15 @@ describe('generated backgrounds and 3D primitives', () => {
     }
     expect(objectPixels).toBeGreaterThan(50);
 
-    // Live video frames use the same underlay/overlay pair.
+    // Live video frames composite the underlay/overlay via the render pipeline
+    // (after pixelation), rather than being baked into `item.source`.
     const frame = createImage(64, 64);
-    const composited = applyTrackedAlphaCuts(item, frame, 0, undefined);
-    expect(pixel(composited, 2, 2)).toEqual([255, 0, 0, 255]);
-    expect(pixel(composited, 20, 2)).toEqual([0, 0, 255, 255]);
+    const rendered = renderPixelArt(
+      { image: frame, masks: item.masks, settings: settingsFromItem(item), underlay: item.underlay, overlay: item.overlay },
+      { upscale: false },
+    );
+    expect(pixel(rendered.artAtPixelScale, 2, 2)).toEqual([255, 0, 0, 255]);
+    expect(pixel(rendered.artAtPixelScale, 20, 2)).toEqual([0, 0, 255, 255]);
   });
 });
 

@@ -2,7 +2,8 @@ import React from 'react';
 import type { ColorCorrectionSettings, GraphNode } from '../../../core/types';
 import { COLOR_CORRECTION_PARAMS, DEFAULT_COLOR_CORRECTION } from '../../../core/preprocess';
 import { useStudio } from '../../store';
-import { Section, Slider, Badge } from '../controls';
+import { Section, Badge } from '../controls';
+import { Field } from '../Field';
 import { Icon } from '../icons';
 
 const PRESETS: Array<{ name: string; values: Partial<ColorCorrectionSettings> }> = [
@@ -59,15 +60,16 @@ export function ColorPanel({ node }: { node: GraphNode }): React.ReactElement {
 
       <Section title="Adjustments">
         {COLOR_CORRECTION_PARAMS.map((param) => (
-          <Slider
+          <Field
             key={param.key}
+            node={node}
+            path={`color.${param.key}`}
             label={param.label}
-            value={Number(color[param.key as keyof ColorCorrectionSettings] ?? param.default)}
             min={param.min}
             max={param.max}
             step={param.step}
             unit={param.unit}
-            onChange={(value) => set({ [param.key]: value } as Partial<ColorCorrectionSettings>)}
+            defaultValue={param.default}
           />
         ))}
         <button

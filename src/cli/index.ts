@@ -287,14 +287,20 @@ async function loadImage(file: string): Promise<PixelImage> {
 async function writeImage(
   image: PixelImage,
   file: string,
-  format: 'png' | 'webp',
+  format: 'png' | 'webp' | 'jpeg',
   quality: number,
 ): Promise<void> {
   await mkdir(dirname(file), { recursive: true });
   let pipeline = sharp(Buffer.from(image.data.buffer, image.data.byteOffset, image.data.byteLength), {
     raw: { width: image.width, height: image.height, channels: 4 },
   });
-  pipeline = format === 'webp' ? pipeline.webp({ quality: Math.round(quality * 100) }) : pipeline.png();
+  if (format === 'webp') {
+    pipeline = pipeline.webp({ quality: Math.round(quality * 100) });
+  } else if (format === 'jpeg') {
+    pipeline = pipeline.flatten({ background: '#000000' }).jpeg({ quality: Math.round(quality * 100) });
+  } else {
+    pipeline = pipeline.png();
+  }
   await pipeline.toFile(file);
 }
 
@@ -335,7 +341,16 @@ function renderWithGraph(
       settings.output = output ? deepClone(output) : settings.output;
       settings.video = video ? deepClone(video) : settings.video;
       settings = applyOverrides(settings, options);
-      const result = renderPixelArt({ image: item.source, masks: item.masks, settings }, { upscale: true });
+      const result = renderPixelArt(
+        {
+          image: item.source,
+          masks: item.masks,
+          settings,
+          underlay: item.underlay,
+          overlay: item.overlay,
+        },
+        { upscale: true },
+      );
       outputs.push({
         itemName: item.name,
         outputName: String(outNode.params.label ?? outNode.title),

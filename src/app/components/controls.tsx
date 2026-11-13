@@ -1,5 +1,7 @@
 import React, { useEffect, useId, useState } from 'react';
 import { Icon, type IconName } from './icons';
+import { ColorWheel, normalizeHex } from './ColorWheel';
+import { useStudio } from '../store';
 
 export function Section({
   title,
@@ -47,6 +49,11 @@ export function Slider({
   hint,
   disabled,
   format,
+  defaultValue,
+  pinned,
+  onTogglePin,
+  driven,
+  onToggleDrive,
 }: {
   label: string;
   value: number;
@@ -58,15 +65,44 @@ export function Slider({
   hint?: string;
   disabled?: boolean;
   format?: (value: number) => string;
+  defaultValue?: number;
+  pinned?: boolean;
+  onTogglePin?: () => void;
+  driven?: boolean;
+  onToggleDrive?: () => void;
 }): React.ReactElement {
   const decimals = step < 0.01 ? 3 : step < 1 ? 2 : 0;
   const display = format ? format(value) : Number(value).toFixed(decimals);
+  const locked = Boolean(disabled || driven);
   return (
-    <div className={`control slider-control ${disabled ? 'is-disabled' : ''}`} title={hint}>
+    <div
+      className={`control slider-control ${disabled ? 'is-disabled' : ''} ${driven ? 'is-driven' : ''}`}
+      title={hint}
+    >
       <div className="control-row">
         <label className="control-label">{label}</label>
+        <ControlActions
+          pinned={pinned}
+          driven={driven}
+          onReset={defaultValue !== undefined ? () => onChange(defaultValue) : undefined}
+          onTogglePin={onTogglePin}
+          onToggleDrive={onToggleDrive}
+        />
         <span className="control-value">
-          {display}
+          <input
+            className="num-input"
+            type="number"
+            min={min}
+            max={max}
+            step={step}
+            value={Number.isFinite(value) ? value : 0}
+            disabled={locked}
+            aria-label={label}
+            onChange={(e) => {
+              const n = Number(e.target.value);
+              if (Number.isFinite(n)) onChange(n);
+            }}
+          />
           {unit ? <em>{unit}</em> : null}
         </span>
       </div>
@@ -76,7 +112,7 @@ export function Slider({
         max={max}
         step={step}
         value={value}
-        disabled={disabled}
+        disabled={locked}
         onChange={(e) => onChange(Number(e.target.value))}
         aria-label={label}
       />
@@ -94,6 +130,11 @@ export function NumberField({
   unit,
   hint,
   disabled,
+  defaultValue,
+  pinned,
+  onTogglePin,
+  driven,
+  onToggleDrive,
 }: {
   label: string;
   value: number;
@@ -104,10 +145,28 @@ export function NumberField({
   unit?: string;
   hint?: string;
   disabled?: boolean;
+  defaultValue?: number;
+  pinned?: boolean;
+  onTogglePin?: () => void;
+  driven?: boolean;
+  onToggleDrive?: () => void;
 }): React.ReactElement {
+  const locked = Boolean(disabled || driven);
   return (
-    <div className={`control number-control ${disabled ? 'is-disabled' : ''}`} title={hint}>
-      <label className="control-label">{label}</label>
+    <div
+      className={`control number-control ${disabled ? 'is-disabled' : ''} ${driven ? 'is-driven' : ''}`}
+      title={hint}
+    >
+      <div className="control-row">
+        <label className="control-label">{label}</label>
+        <ControlActions
+          pinned={pinned}
+          driven={driven}
+          onReset={defaultValue !== undefined ? () => onChange(defaultValue) : undefined}
+          onTogglePin={onTogglePin}
+          onToggleDrive={onToggleDrive}
+        />
+      </div>
       <div className="number-wrap">
         <input
           type="number"
@@ -115,7 +174,7 @@ export function NumberField({
           min={min}
           max={max}
           step={step}
-          disabled={disabled}
+          disabled={locked}
           onChange={(e) => {
             const n = Number(e.target.value);
             if (Number.isFinite(n)) onChange(n);
@@ -124,6 +183,51 @@ export function NumberField({
         {unit ? <span className="unit">{unit}</span> : null}
       </div>
     </div>
+  );
+}
+
+function ControlActions({
+  pinned,
+  driven,
+  onReset,
+  onTogglePin,
+  onToggleDrive,
+}: {
+  pinned?: boolean;
+  driven?: boolean;
+  onReset?: () => void;
+  onTogglePin?: () => void;
+  onToggleDrive?: () => void;
+}): React.ReactElement | null {
+  if (!onReset && !onTogglePin && !onToggleDrive) return null;
+  return (
+    <span className="control-actions">
+      {onTogglePin ? (
+        <button
+          type="button"
+          className={`mini-btn ${pinned ? 'is-active' : ''}`}
+          title={pinned ? 'Unpin from node' : 'Pin to node'}
+          onClick={onTogglePin}
+        >
+          <Icon name="pin" size={12} />
+        </button>
+      ) : null}
+      {onToggleDrive ? (
+        <button
+          type="button"
+          className={`mini-btn ${driven ? 'is-active' : ''}`}
+          title={driven ? 'Disconnect value input' : 'Get value from another node'}
+          onClick={onToggleDrive}
+        >
+          <Icon name="link" size={12} />
+        </button>
+      ) : null}
+      {onReset ? (
+        <button type="button" className="mini-btn" title="Reset to default" onClick={onReset}>
+          <Icon name="refresh" size={12} />
+        </button>
+      ) : null}
+    </span>
   );
 }
 
@@ -227,25 +331,51 @@ export function ColorField({
   hint?: string;
 }): React.ReactElement {
   const [text, setText] = useState(value);
+  const [open, setOpen] = useState(false);
+  const { setPaletteStudioOpen } = useStudio();
   useEffect(() => setText(value), [value]);
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent): void => {
+      if (e.key === 'Escape') setOpen(false);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [open]);
   return (
     <div className="control color-control" title={hint}>
       <label className="control-label">{label}</label>
       <div className="color-wrap">
-        <input type="color" value={value} onChange={(e) => onChange(e.target.value)} aria-label={label} />
+        <button
+          type="button"
+          className="color-swatch"
+          style={{ background: value }}
+          onClick={() => setOpen((v) => !v)}
+          aria-label={`${label} color picker`}
+        />
         <input
           type="text"
           value={text}
           spellCheck={false}
           onChange={(e) => {
             setText(e.target.value);
-            if (/^#[0-9a-f]{6}$/i.test(e.target.value.trim())) onChange(e.target.value.trim());
+            if (/^#?[0-9a-f]{6}$/i.test(e.target.value.trim())) onChange(normalizeHex(e.target.value.trim())!);
           }}
           onBlur={() => {
-            if (!/^#[0-9a-f]{6}$/i.test(text.trim())) setText(value);
+            if (/^#?[0-9a-f]{6}$/i.test(text.trim())) onChange(normalizeHex(text.trim())!);
+            else setText(value);
           }}
         />
       </div>
+      {open ? (
+        <div className="color-popover">
+          <ColorWheel
+            value={value}
+            onChange={onChange}
+            onCreatePalette={() => setPaletteStudioOpen(true)}
+          />
+        </div>
+      ) : null}
     </div>
   );
 }

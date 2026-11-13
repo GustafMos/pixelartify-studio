@@ -12,6 +12,7 @@ export function TopBar(): React.ReactElement {
     setMode,
     presets,
     applyPreset,
+    newCleanSlate,
     savePreset,
     deletePreset,
     importPresetFile,
@@ -92,6 +93,9 @@ export function TopBar(): React.ReactElement {
         </button>
         <button type="button" className="ghost-btn small" onClick={() => setSaveOpen(true)}>
           <Icon name="save" size={14} /> Save preset
+        </button>
+        <button type="button" className="ghost-btn small" onClick={() => newCleanSlate()} title="Start a clean graph: Media input → Output, no processing.">
+          <Icon name="plus" size={14} /> Clean slate
         </button>
         {presetOpen ? (
           <div className="preset-popover" onMouseLeave={() => setPresetOpen(false)}>

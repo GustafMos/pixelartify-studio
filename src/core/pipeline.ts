@@ -23,6 +23,7 @@ import {
   blendPixel,
   cloneImage,
   compositeLayers,
+  compositeOver,
   createImage,
   gaussianBlurRGBA,
   multiplyAlpha,
@@ -134,7 +135,15 @@ export interface RenderOptions {
 }
 
 export function renderPixelArt(
-  input: { image: PixelImage; masks?: Record<string, MaskData>; settings: PixelArtifySettings },
+  input: {
+    image: PixelImage;
+    masks?: Record<string, MaskData>;
+    settings: PixelArtifySettings;
+    /** Generated backdrop, at art resolution, composited behind the art. */
+    underlay?: PixelImage;
+    /** Generated overlay, at art resolution, composited on top of the art. */
+    overlay?: PixelImage;
+  },
   options: RenderOptions = {},
 ): RenderResult {
   const start = now();
@@ -199,7 +208,7 @@ export function renderPixelArt(
 
   stage('Preprocessing', 0.15);
   if (settings.preprocess.ops.length > 0) {
-    src = applyPreprocess(src, settings.preprocess.ops, ctx);
+    src = applyPreprocess(src, settings.preprocess.ops, ctx, masks);
   }
 
   if (pixelationEnabled) {
@@ -367,18 +376,31 @@ export function renderPixelArt(
 
   if (settings.postprocess.ops.length > 0) {
     stage('Postprocessing', 0.8);
-    art = applyPostprocess(art, settings.postprocess.ops, {
-      artWidth: size.width,
-      artHeight: size.height,
-      seed: options.seed ?? 0,
-      time: options.time ?? 0,
-    });
+    art = applyPostprocess(
+      art,
+      settings.postprocess.ops,
+      {
+        artWidth: size.width,
+        artHeight: size.height,
+        seed: options.seed ?? 0,
+        time: options.time ?? 0,
+      },
+      masks,
+    );
     if (settings.postprocess.lockPalette && palette.length > 0) {
       snapToPalette(art, palette, paletteSettings.colorSpace, 1);
     }
   }
 
   stage('Upscaling', 0.9);
+
+  // Generated underlay/overlay (Background / 3D object composited over media)
+  // live at art resolution and are applied on top of the processed art, before
+  // the export upscale. Compositing here — instead of before pixelation —
+  // keeps them from being re-pixelated, palette-mapped or dithered.
+  if (input.underlay) art = compositeOver(input.underlay, art);
+  if (input.overlay) art = compositeOver(art, input.overlay);
+
   return finalize(art, palette, renderLayers, usedEdgeMap);
 }
 

@@ -63,11 +63,13 @@ export function pixelImageToDataUrl(image: PixelImage): string {
 
 export async function pixelImageToBlob(
   image: PixelImage,
-  format: 'png' | 'webp' = 'png',
+  format: 'png' | 'webp' | 'jpeg' = 'png',
   quality = 0.92,
 ): Promise<Blob> {
   const canvas = pixelImageToCanvas(image);
-  const mime = format === 'webp' ? 'image/webp' : 'image/png';
+  // JPEG has no alpha channel: the browser flattens transparent pixels (to
+  // black) when encoding. PNG/WebP keep transparency as before.
+  const mime = format === 'webp' ? 'image/webp' : format === 'jpeg' ? 'image/jpeg' : 'image/png';
   return new Promise<Blob>((resolve, reject) => {
     canvas.toBlob(
       (blob) => (blob ? resolve(blob) : reject(new Error('Image encoding failed.'))),
@@ -202,7 +204,11 @@ export function humanBytes(bytes: number): string {
 }
 
 export const IMAGE_EXTENSIONS = ['png', 'jpg', 'jpeg', 'webp', 'gif', 'bmp', 'avif'];
-export const VIDEO_EXTENSIONS = ['mp4', 'webm', 'mov', 'mkv', 'm4v', 'ogv'];
+export const VIDEO_EXTENSIONS = [
+  'mp4', 'webm', 'mov', 'mkv', 'm4v', 'ogv',
+  'avi', 'ts', 'mts', 'm2ts', 'wmv', 'flv',
+  '3gp', '3g2', 'mpg', 'mpeg', 'mxf', 'vob', 'divx',
+];
 
 export function fileKind(file: File): 'image' | 'video' | null {
   const ext = file.name.split('.').pop()?.toLowerCase() ?? '';

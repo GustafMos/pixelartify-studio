@@ -3,7 +3,8 @@ import type { DitherSettings, GraphNode } from '../../../core/types';
 import { DITHER_ALGORITHMS, DITHER_BY_ID, type DitherCategory } from '../../../core/dither';
 import { DEFAULT_DITHER } from '../../../core/defaults';
 import { useStudio } from '../../store';
-import { Badge, Section, Segmented, SelectField, Slider, Toggle } from '../controls';
+import { Badge, Section, Segmented, SelectField, Toggle } from '../controls';
+import { Field } from '../Field';
 import { Icon } from '../icons';
 
 const CATEGORY_LABEL: Record<string, string> = {
@@ -97,15 +98,16 @@ export function DitherPanel({ node }: { node: GraphNode }): React.ReactElement {
 
       {selected.category !== 'none' ? (
         <Section title="Parameters">
-          <Slider label="Strength" value={dither.strength} min={0} max={1} step={0.01} onChange={(v) => set({ strength: v })} />
-          <Slider
+          <Field node={node} path="dither.strength" label="Strength" min={0} max={1} step={0.01} defaultValue={DEFAULT_DITHER.strength} />
+          <Field
+            node={node}
+            path="dither.scale"
             label="Pattern scale"
-            value={dither.scale}
             min={0.5}
             max={6}
             step={0.25}
             unit="art px"
-            onChange={(v) => set({ scale: v })}
+            defaultValue={DEFAULT_DITHER.scale}
             hint="Scales the dither matrix in art pixels. Keeps the texture proportional across resolutions."
           />
           {selected.category === 'diffusion' ? (
@@ -121,8 +123,8 @@ export function DitherPanel({ node }: { node: GraphNode }): React.ReactElement {
             ]}
             onChange={(v) => set({ colorSpace: v as DitherSettings['colorSpace'] })}
           />
-          <Slider label="Threshold bias" value={dither.threshold} min={-1} max={1} step={0.01} onChange={(v) => set({ threshold: v })} />
-          <Slider label="Seed" value={dither.seed} min={0} max={9999} step={1} onChange={(v) => set({ seed: v })} />
+          <Field node={node} path="dither.threshold" label="Threshold bias" min={-1} max={1} step={0.01} defaultValue={DEFAULT_DITHER.threshold} />
+          <Field node={node} path="dither.seed" label="Seed" min={0} max={9999} step={1} defaultValue={DEFAULT_DITHER.seed} />
         </Section>
       ) : (
         <div className="info-callout">

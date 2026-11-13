@@ -40,12 +40,13 @@ import {
 import {
   NODE_DEFS,
   createDefaultGraph,
+  createCleanSlateGraph,
   deleteNodePreservingGraph,
   applyTrackedAlphaCuts,
   type GraphAsset,
   type GraphMediaItem,
 } from '../core/graph';
-import { loadGraph, saveGraph, loadUserPresets, saveUserPresets, loadUserPalettes, saveUserPalettes, loadActivePaletteId, saveActivePaletteId, loadUiMode, saveUiMode, loadRecentNodes, saveRecentNodes } from './storage';
+import { loadGraph, saveGraph, loadUserPresets, saveUserPresets, loadUserPalettes, saveUserPalettes, loadActivePaletteId, saveActivePaletteId, loadUiMode, saveUiMode, loadRecentNodes, saveRecentNodes, loadColorSpace, saveColorSpace, type ColorSpaceOption } from './storage';
 import {
   decodeImageFile,
   downloadText,
@@ -61,6 +62,7 @@ import { resizeMask } from '../core/image';
 import type { TrackedMaskSequence } from '../core/graph';
 import { grabVideoFrame, probeVideo, extractVideoFrames, type VideoProbe } from './video';
 import { animationSettings, playbackPaletteKey, playbackSettings } from './playback';
+import { renderTextLayer } from './textRender';
 
 export interface AssetRecord {
   id: string;
@@ -143,6 +145,8 @@ interface StudioContextValue {
   ) => Promise<void>;
   paletteStudioOpen: boolean;
   toasts: Toast[];
+  colorSpace: ColorSpaceOption;
+  setColorSpace: (cs: ColorSpaceOption) => void;
   setMode: (mode: 'studio' | 'split' | 'graph') => void;
   selectNode: (id: string | null, additive?: boolean) => void;
   setSelectedOutput: (id: string) => void;
@@ -154,7 +158,7 @@ interface StudioContextValue {
   beginSubjectSelect: (nodeId: string, maskId: string, mode?: 'magic' | 'box') => void;
   endSubjectSelect: () => void;
   setPreviewFullQuality: (full: boolean) => void;
-  addNode: (type: GraphNodeType, x?: number, y?: number) => string;
+  addNode: (type: GraphNodeType, x?: number, y?: number, paramsOverride?: Record<string, unknown>) => string;
   createGroup: () => string | null;
   duplicateGroup: (id: string) => string | null;
   ungroup: (id: string) => void;
@@ -164,7 +168,10 @@ interface StudioContextValue {
   deleteNode: (id: string) => void;
   updateNode: (id: string, patch: Partial<GraphNode>) => void;
   updateNodeParams: (id: string, patch: Record<string, unknown>) => void;
+  togglePin: (nodeId: string, path: string) => void;
+  toggleDrive: (nodeId: string, path: string, currentValue: number) => void;
   moveNode: (id: string, x: number, y: number) => void;
+  setGraphCursor: (x: number, y: number) => void;
   addEdge: (fromNode: string, fromPort: string, toNode: string, toPort: string) => void;
   deleteEdge: (edgeId: string) => void;
   insertNodeOnEdge: (nodeId: string, edgeId: string) => boolean;
@@ -175,6 +182,7 @@ interface StudioContextValue {
   removeAsset: (nodeId: string, assetId: string) => void;
   clearAssets: (nodeId: string) => void;
   applyPreset: (preset: Preset) => void;
+  newCleanSlate: () => void;
   savePreset: (name: string, description?: string) => Preset | null;
   deletePreset: (id: string) => void;
   importPresetFile: (file: File) => Promise<void>;
@@ -248,6 +256,7 @@ export function StudioProvider({ children }: { children: React.ReactNode }): Rea
   const [maskTracking, setMaskTracking] = useState<{ key: string; done: number; total: number } | null>(null);
   const [trackedMasks, setTrackedMasks] = useState<Record<string, TrackedMaskSequence>>({});
   const [paletteStudioOpen, setPaletteStudioOpen] = useState(false);
+  const [colorSpace, setColorSpaceState] = useState<ColorSpaceOption>(() => loadColorSpace());
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [isExporting, setIsExporting] = useState(false);
   const [exportProgress, setExportProgress] = useState<string | null>(null);
@@ -261,6 +270,7 @@ export function StudioProvider({ children }: { children: React.ReactNode }): Rea
   const renderGenRef = useRef(0);
   const videoLoadRef = useRef(0);
   const animationPaletteRef = useRef<{ key: string; colors: string[] } | null>(null);
+  const graphCursorRef = useRef<{ x: number; y: number } | null>(null);
 
   const notify = useCallback((message: string, kind: Toast['kind'] = 'info') => {
     const id = toastIdRef.current++;
@@ -379,6 +389,7 @@ export function StudioProvider({ children }: { children: React.ReactNode }): Rea
         maskCache: maskCacheRef.current,
         maskOverrides,
         time: videoTime + animationTime,
+        textRenderer: renderTextLayer,
       }),
     [graph, assetsByNode, maskOverrides, videoTime, animationTime],
   );
@@ -431,7 +442,13 @@ export function StudioProvider({ children }: { children: React.ReactNode }): Rea
           masks = { ...masks };
         }
         const result = renderPixelArt(
-          { image: source, masks, settings },
+          {
+            image: source,
+            masks,
+            settings,
+            underlay: activeItem.underlay,
+            overlay: activeItem.overlay,
+          },
           {
             stopAfter: stopStageForNode(previewNode.type),
             upscale: false,
@@ -479,6 +496,7 @@ export function StudioProvider({ children }: { children: React.ReactNode }): Rea
         maskOverrides,
         time,
         maxGeneratedSide: fullQuality ? undefined : 256,
+        textRenderer: renderTextLayer,
       });
       const items = mediaAtPort(ev, previewNode.id);
       if (items.length === 0) return null;
@@ -494,7 +512,13 @@ export function StudioProvider({ children }: { children: React.ReactNode }): Rea
           ? animationPaletteRef.current.colors
           : undefined;
       const result = renderPixelArt(
-        { image: item.source, masks: item.masks, settings },
+        {
+          image: item.source,
+          masks: item.masks,
+          settings,
+          underlay: item.underlay,
+          overlay: item.overlay,
+        },
         {
           stopAfter: stopStageForNode(previewNode.type),
           upscale: fullQuality,
@@ -531,6 +555,9 @@ export function StudioProvider({ children }: { children: React.ReactNode }): Rea
   useEffect(() => {
     saveUiMode(mode);
   }, [mode]);
+  useEffect(() => {
+    saveColorSpace(colorSpace);
+  }, [colorSpace]);
 
   // Video preview frame extraction.
   useEffect(() => {
@@ -601,6 +628,7 @@ export function StudioProvider({ children }: { children: React.ReactNode }): Rea
   const setActiveAsset = useCallback((id: string) => setActiveAssetIdState(id), []);
   const setActivePalette = useCallback((id: string | null) => setActivePaletteIdState(id), []);
   const setPaletteStudioOpenCb = useCallback((open: boolean) => setPaletteStudioOpen(open), []);
+  const setColorSpace = useCallback((cs: ColorSpaceOption) => setColorSpaceState(cs), []);
   const setVideoTime = useCallback((time: number) => setVideoTimeState(Math.max(0, time)), []);
   const setVideoPlaying = useCallback((playing: boolean) => {
     setVideoPlayingState(playing);
@@ -623,7 +651,7 @@ export function StudioProvider({ children }: { children: React.ReactNode }): Rea
   );
   const endSubjectSelect = useCallback(() => setSubjectSelect(null), []);
 
-  const addNode = useCallback((type: GraphNodeType, x?: number, y?: number): string => {
+  const addNode = useCallback((type: GraphNodeType, x?: number, y?: number, paramsOverride?: Record<string, unknown>): string => {
     const settings = settingsFromGraph(graph);
     const def = NODE_DEFS[type];
     const anchor = selectedNode ?? null;
@@ -697,11 +725,17 @@ export function StudioProvider({ children }: { children: React.ReactNode }): Rea
         };
       }
     } else if (px === undefined || py === undefined) {
-      px = 80;
-      py = 200;
+      const cursor = graphCursorRef.current;
+      if (cursor) {
+        px = cursor.x;
+        py = cursor.y;
+      } else {
+        px = 80;
+        py = 200;
+      }
     }
 
-    const node = createNode(type, px ?? 80, py ?? 200, nodeParams(type, settings), settings);
+    const node = createNode(type, px ?? 80, py ?? 200, paramsOverride ?? nodeParams(type, settings), settings);
     if (anchor) {
       const anchorMotionIn = NODE_DEFS[anchor.type].inputs.find((p) => p.type === 'motion');
       const newMotionOut = def.outputs.find((p) => p.type === 'motion');
@@ -974,6 +1008,72 @@ export function StudioProvider({ children }: { children: React.ReactNode }): Rea
     );
   }, [mutateGraph]);
 
+  /** Pin/unpin a field so its value shows (and is editable) on the node body. */
+  const togglePin = useCallback((nodeId: string, path: string) => {
+    mutateGraph((g) => {
+      const node = g.nodes.find((n) => n.id === nodeId);
+      if (!node) return g;
+      const pins = (node.params.pins as Record<string, boolean> | undefined) ?? {};
+      const next = { ...pins };
+      if (next[path]) delete next[path];
+      else next[path] = true;
+      return {
+        ...g,
+        nodes: g.nodes.map((n) =>
+          n.id === nodeId ? { ...n, params: { ...n.params, pins: next } } : n,
+        ),
+      };
+    });
+  }, [mutateGraph]);
+
+  /**
+   * Toggle whether a field is driven by a Constant/Math value node. Driving
+   * creates a Constant node (wired into the node's `value` input) and records
+   * `fieldPath -> nodeId` in `params.drivers`; un-driving removes the wire and
+   * the auto-created constant if it becomes orphaned.
+   */
+  const toggleDrive = useCallback((nodeId: string, path: string, currentValue: number) => {
+    mutateGraph((g) => {
+      const node = g.nodes.find((n) => n.id === nodeId);
+      if (!node) return g;
+      const drivers = (node.params.drivers as Record<string, string> | undefined) ?? {};
+      const existing = drivers[path];
+
+      if (existing) {
+        const edges = g.edges.filter(
+          (e) => !(e.fromNode === existing && e.toNode === nodeId && e.toPort === 'value'),
+        );
+        const nextDrivers = { ...drivers };
+        delete nextDrivers[path];
+        const stillUsed =
+          edges.some((e) => e.fromNode === existing) || Object.values(nextDrivers).includes(existing);
+        const nodes = (stillUsed
+          ? g.nodes
+          : g.nodes.filter((n) => n.id !== existing)
+        ).map((n) =>
+          n.id === nodeId ? { ...n, params: { ...n.params, drivers: nextDrivers } } : n,
+        );
+        return { ...g, nodes, edges };
+      }
+
+      const settings = settingsFromGraph(g);
+      const constant = createNode('constant', node.x - 230, node.y, { value: currentValue }, settings);
+      const edges = [
+        ...g.edges,
+        { id: uid('edge'), fromNode: constant.id, fromPort: 'value', toNode: nodeId, toPort: 'value' },
+      ];
+      const nodes = [
+        ...g.nodes.map((n) =>
+          n.id === nodeId
+            ? { ...n, params: { ...n.params, drivers: { ...drivers, [path]: constant.id } } }
+            : n,
+        ),
+        constant,
+      ];
+      return { ...g, nodes, edges };
+    });
+  }, [mutateGraph]);
+
   const moveNode = useCallback((id: string, x: number, y: number) => {
     mutateGraph(
       (g) => ({
@@ -983,6 +1083,10 @@ export function StudioProvider({ children }: { children: React.ReactNode }): Rea
       true,
     );
   }, [mutateGraph]);
+
+  const setGraphCursor = useCallback((x: number, y: number) => {
+    graphCursorRef.current = { x, y };
+  }, []);
 
   const addEdge = useCallback((fromNode: string, fromPort: string, toNode: string, toPort: string) => {
     const from = graph.nodes.find((n) => n.id === fromNode);
@@ -995,6 +1099,34 @@ export function StudioProvider({ children }: { children: React.ReactNode }): Rea
       notify(`Cannot connect ${out.type} to ${inp.type}.`, 'error');
       return;
     }
+
+    // Reconnecting into an occupied single media input inserts a Switcher so
+    // both branches stay available and the active one can be chosen.
+    if (out.type === 'media' && !inp.multiple) {
+      const existing = graph.edges.find(
+        (e) => e.toNode === toNode && e.toPort === toPort && e.fromNode !== fromNode,
+      );
+      if (existing) {
+        const settings = settingsFromGraph(graph);
+        const switcher = createNode('switcher', to.x - 220, to.y, { activeIndex: 1 }, settings);
+        const edges = graph.edges.filter((e) => e.id !== existing.id);
+        edges.push(
+          { id: uid('edge'), fromNode: existing.fromNode, fromPort: existing.fromPort, toNode: switcher.id, toPort: 'media' },
+          { id: uid('edge'), fromNode, fromPort, toNode: switcher.id, toPort: 'media' },
+          { id: uid('edge'), fromNode: switcher.id, fromPort: 'media', toNode, toPort },
+        );
+        const candidate: PipelineGraph = { ...graph, nodes: [...graph.nodes, switcher], edges };
+        if (validateGraph(candidate).some((error) => /cycle/i.test(error.message))) {
+          notify('That connection would create a cycle.', 'error');
+          return;
+        }
+        const existingTitle = graph.nodes.find((n) => n.id === existing.fromNode)?.title ?? 'another node';
+        mutateGraph(() => candidate);
+        notify(`Switcher added to route between “${existingTitle}” and “${from.title}”.`, 'info');
+        return;
+      }
+    }
+
     const filtered = inp.multiple
       ? graph.edges
       : graph.edges.filter((e) => !(e.toNode === toNode && e.toPort === toPort));
@@ -1259,6 +1391,23 @@ export function StudioProvider({ children }: { children: React.ReactNode }): Rea
     notify(`Preset “${preset.name}” applied.`, 'success');
   }, [allAssets, graph, notify]);
 
+  const newCleanSlate = useCallback(() => {
+    const nextGraph = createCleanSlateGraph(defaultSettings());
+    setGraph(nextGraph);
+    historyRef.current.push(graph);
+    futureRef.current = [];
+    setAssetsByNode({});
+    setActiveAssetIdState(null);
+    setMaskOverrides({});
+    maskCacheRef.current.clear();
+    const out = nextGraph.nodes.find((n) => n.type === 'output');
+    if (out) {
+      setSelectedOutputId(out.id);
+      setSelectedNodeId(out.id);
+    }
+    notify('Clean slate: Media input → Output, lossless pass-through.', 'success');
+  }, [graph, notify]);
+
   const savePreset = useCallback((name: string, description = ''): Preset | null => {
     const trimmed = name.trim();
     if (!trimmed) {
@@ -1464,7 +1613,13 @@ export function StudioProvider({ children }: { children: React.ReactNode }): Rea
     try {
       const settings = applyOutputSettings(activeItem);
       const result = renderPixelArt(
-        { image: activeAsset?.kind === 'video' && videoFrame ? videoFrame : activeItem.source, masks: activeItem.masks, settings },
+        {
+          image: activeAsset?.kind === 'video' && videoFrame ? videoFrame : activeItem.source,
+          masks: activeItem.masks,
+          settings,
+          underlay: activeItem.underlay,
+          overlay: activeItem.overlay,
+        },
         { upscale: true, time: animationTime + videoTime },
       );
       const blob = await pixelImageToBlob(result.art, settings.output.format, settings.output.quality);
@@ -1522,7 +1677,13 @@ export function StudioProvider({ children }: { children: React.ReactNode }): Rea
     try {
       const settings = applyOutputSettings(activeItem);
       const result = renderPixelArt(
-        { image: activeItem.source, masks: activeItem.masks, settings },
+        {
+          image: activeItem.source,
+          masks: activeItem.masks,
+          settings,
+          underlay: activeItem.underlay,
+          overlay: activeItem.overlay,
+        },
         { upscale: false, time: animationTime + videoTime },
       );
       const entries: Array<{ name: string; data: Blob | string }> = [];
@@ -1582,7 +1743,13 @@ export function StudioProvider({ children }: { children: React.ReactNode }): Rea
         setExportProgress(`Rendering ${i + 1} / ${items.length}: ${item.name}`);
         const settings = applyOutputSettings(item);
         const result = renderPixelArt(
-          { image: item.source, masks: item.masks, settings },
+          {
+            image: item.source,
+            masks: item.masks,
+            settings,
+            underlay: item.underlay,
+            overlay: item.overlay,
+          },
           { upscale: true, time: animationTime + videoTime },
         );
         const blob = await pixelImageToBlob(result.art, settings.output.format, settings.output.quality);
@@ -1692,6 +1859,8 @@ export function StudioProvider({ children }: { children: React.ReactNode }): Rea
     trackSubject,
     paletteStudioOpen,
     toasts,
+    colorSpace,
+    setColorSpace,
     setMode,
     selectNode,
     setSelectedOutput,
@@ -1713,7 +1882,10 @@ export function StudioProvider({ children }: { children: React.ReactNode }): Rea
     deleteNode,
     updateNode,
     updateNodeParams,
+    togglePin,
+    toggleDrive,
     moveNode,
+    setGraphCursor,
     addEdge,
     deleteEdge,
     insertNodeOnEdge,
@@ -1724,6 +1896,7 @@ export function StudioProvider({ children }: { children: React.ReactNode }): Rea
     removeAsset,
     clearAssets,
     applyPreset,
+    newCleanSlate,
     savePreset,
     deletePreset,
     importPresetFile,

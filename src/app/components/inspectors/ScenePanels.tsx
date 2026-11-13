@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useRef } from 'react';
 import type { GraphNode } from '../../../core/types';
 import {
   BACKGROUND_MODES,
@@ -10,6 +10,7 @@ import {
   PRIMITIVES_3D,
   type Render3DParams,
 } from '../../../core/render3d';
+import { parseMesh } from '../../../core/meshImport';
 import {
   DEFAULT_MOTION,
   evaluateMotion,
@@ -507,10 +508,25 @@ export function RetimePanel({ node }: { node: GraphNode }): React.ReactElement {
 }
 
 export function Object3DPanel({ node }: { node: GraphNode }): React.ReactElement {
-  const { updateNodeParams } = useStudio();
+  const { updateNodeParams, notify } = useStudio();
   const connected = useHasMediaInput(node);
   const p: Render3DParams = { ...DEFAULT_OBJECT3D, ...(node.params as Partial<Render3DParams>) };
   const set = (patch: Partial<Render3DParams>): void => updateNodeParams(node.id, patch);
+  const meshRef = useRef<HTMLInputElement>(null);
+
+  const loadMesh = async (file: File): Promise<void> => {
+    try {
+      const mesh = parseMesh(file.name, await file.text());
+      if (!mesh || mesh.vertices.length === 0) {
+        notify(`Could not parse “${file.name}” as OBJ/FBX/GLTF.`, 'error');
+        return;
+      }
+      set({ mesh, meshName: file.name });
+      notify(`Loaded “${file.name}” (${mesh.vertices.length} vertices, ${mesh.triangles.length / 3} triangles).`, 'success');
+    } catch (err) {
+      notify(`Mesh import failed: ${err instanceof Error ? err.message : err}`, 'error');
+    }
+  };
 
   return (
     <div className="inspector-panel">
@@ -520,9 +536,37 @@ export function Object3DPanel({ node }: { node: GraphNode }): React.ReactElement
       >
         <SelectField
           label="Shape"
-          value={p.primitive}
-          options={PRIMITIVES_3D}
-          onChange={(primitive) => set({ primitive })}
+          value={p.mesh ? 'mesh' : p.primitive}
+          options={[
+            ...(p.mesh ? [{ value: 'mesh' as const, label: `Mesh · ${p.meshName ?? 'imported'}` }] : []),
+            ...PRIMITIVES_3D,
+          ]}
+          onChange={(v) => set({ primitive: v as Render3DParams['primitive'], mesh: undefined, meshName: undefined })}
+        />
+        <div className="two-col">
+          <button type="button" className="ghost-btn small" onClick={() => meshRef.current?.click()}>
+            <Icon name="upload" size={14} /> Import mesh
+          </button>
+          {p.mesh ? (
+            <button
+              type="button"
+              className="ghost-btn small danger"
+              onClick={() => set({ mesh: undefined, meshName: undefined })}
+            >
+              <Icon name="close" size={14} /> Clear
+            </button>
+          ) : null}
+        </div>
+        <input
+          ref={meshRef}
+          type="file"
+          accept=".obj,.fbx,.gltf"
+          hidden
+          onChange={(e) => {
+            const file = e.target.files?.[0];
+            e.target.value = '';
+            if (file) void loadMesh(file);
+          }}
         />
         <ColorField label="Object colour" value={p.color} onChange={(color) => set({ color })} />
         {!connected ? (

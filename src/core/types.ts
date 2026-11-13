@@ -48,6 +48,7 @@ export type PreprocessType =
   | 'oil'
   | 'watercolor'
   | 'posterize'
+  | 'threshold'
   | 'displace'
   | 'grain'
   | 'soften'
@@ -74,6 +75,10 @@ export interface PreprocessOp {
   params: Record<string, number>;
   /** Optional colour for effects such as outline. */
   color?: string;
+  /** Optional region restriction (Fusion-style bounds) for this effect. */
+  region?: RegionSettings;
+  /** Optional mask id restricting this effect to a connected mask. */
+  maskId?: string;
 }
 
 export interface PreprocessSettings {
@@ -96,12 +101,33 @@ export interface PostprocessOp {
   enabled: boolean;
   params: Record<string, number>;
   color?: string;
+  /** Optional region restriction (Fusion-style bounds) for this effect. */
+  region?: RegionSettings;
+  /** Optional mask id restricting this effect to a connected mask. */
+  maskId?: string;
 }
 
 export interface PostprocessSettings {
   ops: PostprocessOp[];
   /** Re-map colours to the chosen palette after post effects. */
   lockPalette: boolean;
+}
+
+/**
+ * A normalized region-of-interest that restricts a node's effect to part of the
+ * image (Davinci Fusion-style bounds). Optional mask inputs refine it further.
+ */
+export interface RegionSettings {
+  enabled: boolean;
+  /** Normalized 0..1 rectangle. */
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  shape: 'rect' | 'ellipse';
+  /** Feather radius, normalized 0..1 of the smaller frame side. */
+  feather: number;
+  invert: boolean;
 }
 
 export interface PixelateSettings {
@@ -235,9 +261,9 @@ export interface LayerSettings {
   detailStrength: number;
 }
 
-export type OutputFormat = 'png' | 'webp';
+export type OutputFormat = 'png' | 'webp' | 'jpeg';
 export type VideoOutput = 'video' | 'spritesheet' | 'both';
-export type VideoCodec = 'avc' | 'vp9' | 'av1';
+export type VideoCodec = 'avc' | 'vp9' | 'av1' | 'hevc';
 
 export interface OutputSettings {
   format: OutputFormat;
@@ -324,6 +350,13 @@ export type GraphNodeType =
   | 'postprocess'
   | 'merge'
   | 'router'
+  | 'constant'
+  | 'math'
+  | 'text'
+  | 'transform'
+  | 'switcher'
+  | 'shape2d'
+  | 'particles'
   | 'output';
 
 export interface GraphNode {

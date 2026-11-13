@@ -8,6 +8,7 @@
 
 import type {
   ColorCorrectionSettings,
+  MaskData,
   PixelImage,
   PostprocessOp,
   PostprocessType,
@@ -20,11 +21,13 @@ import {
   cloneImage,
   createImage,
   gaussianBlurRGBA,
+  resizeMask,
   sampleBilinear,
   unsharpMask,
 } from './image';
 import { clamp, clamp01, lerp, linearToSrgb, parseHex, srgbToLinear } from './color';
 import { fbm2D, hash2, mulberry32 } from './noise';
+import { regionMask, intersectMasks, restrictToMask } from './region';
 
 export interface EffectParamDef {
   key: string;
@@ -125,6 +128,16 @@ export const PREPROCESS_DEFS: EffectDefinition<PreprocessType>[] = [
     params: [
       { key: 'levels', label: 'Levels', min: 2, max: 32, step: 1, default: 8 },
       { key: 'strength', label: 'Strength', min: 0, max: 1, step: 0.01, default: 1 },
+    ],
+  },
+  {
+    type: 'threshold',
+    title: 'Threshold',
+    category: 'colour',
+    description: 'Binarize by luminance: darker than the threshold goes black, brighter goes white.',
+    params: [
+      { key: 'threshold', label: 'Threshold', min: 0, max: 1, step: 0.01, default: 0.5 },
+      { key: 'softness', label: 'Softness', min: 0, max: 0.5, step: 0.01, default: 0 },
     ],
   },
   {
@@ -400,55 +413,89 @@ export function applyPreprocess(
   input: PixelImage,
   ops: PreprocessOp[],
   ctx: EffectContext,
+  masks?: Record<string, MaskData>,
 ): PixelImage {
-  const accelerated = globalEffectAccelerator?.('preprocess', input, ops, ctx);
+  const hasRegions = ops.some((op) => op.region?.enabled || op.maskId);
+  const accelerated = hasRegions ? null : globalEffectAccelerator?.('preprocess', input, ops, ctx);
   if (accelerated) return accelerated;
   let img = input;
   for (const op of ops) {
     if (!op.enabled) continue;
-    switch (op.type) {
-      case 'colorCorrect':
-        img = colorCorrect(img, op);
-        break;
-      case 'painterly':
-        img = painterly(img, op, ctx);
-        break;
-      case 'oil':
-        img = oilPaint(img, op, ctx);
-        break;
-      case 'watercolor':
-        img = watercolor(img, op, ctx);
-        break;
-      case 'posterize':
-        img = posterize(img, op);
-        break;
-      case 'displace':
-        img = displace(img, op, ctx);
-        break;
-      case 'grain':
-        img = grain(img, op, ctx);
-        break;
-      case 'soften':
-        img = soften(img, op, ctx);
-        break;
-      case 'sharpen':
-        img = unsharpMask(
-          img,
-          Math.max(0.5, (op.params.radius ?? 1) * scaleOf(img, ctx)),
-          op.params.amount ?? 0.7,
-        );
-        break;
-      case 'bloom':
-        img = bloom(img, op, ctx);
-        break;
-      case 'pixelBlur':
-        img = pixelBlur(img, op, ctx);
-        break;
-      default:
-        break;
+    const mask = resolveOpMask(op, masks, img.width, img.height);
+    if (mask) {
+      const before = cloneImage(img);
+      img = applyPreOp(img, op, ctx);
+      img = restrictToMask(before, img, mask);
+    } else {
+      img = applyPreOp(img, op, ctx);
     }
   }
   return img;
+}
+
+function applyPreOp(img: PixelImage, op: PreprocessOp, ctx: EffectContext): PixelImage {
+  switch (op.type) {
+    case 'colorCorrect':
+      return colorCorrect(img, op);
+    case 'painterly':
+      return painterly(img, op, ctx);
+    case 'oil':
+      return oilPaint(img, op, ctx);
+    case 'watercolor':
+      return watercolor(img, op, ctx);
+    case 'posterize':
+      return posterize(img, op);
+    case 'threshold':
+      return threshold(img, op);
+    case 'displace':
+      return displace(img, op, ctx);
+    case 'grain':
+      return grain(img, op, ctx);
+    case 'soften':
+      return soften(img, op, ctx);
+    case 'sharpen':
+      return unsharpMask(
+        img,
+        Math.max(0.5, (op.params.radius ?? 1) * scaleOf(img, ctx)),
+        op.params.amount ?? 0.7,
+      );
+    case 'bloom':
+      return bloom(img, op, ctx);
+    case 'pixelBlur':
+      return pixelBlur(img, op, ctx);
+    default:
+      return img;
+  }
+}
+
+/**
+ * Resolve a per-op coverage mask from an optional region and/or a connected
+ * mask (resized to the current image). Returns null when unrestricted.
+ */
+function resolveOpMask(
+  op: { region?: { enabled: boolean; x: number; y: number; width: number; height: number; shape: 'rect' | 'ellipse'; feather: number; invert: boolean }; maskId?: string },
+  masks: Record<string, MaskData> | undefined,
+  width: number,
+  height: number,
+): MaskData | null {
+  const regionEnabled = op.region?.enabled;
+  const maskId = op.maskId;
+  const connected = maskId && masks ? masks[maskId] : undefined;
+
+  if (!regionEnabled && !connected) return null;
+
+  let combined: MaskData | null = null;
+  if (connected) {
+    combined =
+      connected.width === width && connected.height === height
+        ? { width: connected.width, height: connected.height, data: connected.data.slice() }
+        : resizeMask(connected, width, height);
+  }
+  if (regionEnabled && op.region) {
+    const region = regionMask(width, height, op.region);
+    combined = combined ? intersectMasks(combined, region) : region;
+  }
+  return combined;
 }
 
 /* -------------------------------------------------------------------------- */
@@ -706,6 +753,26 @@ function posterize(img: PixelImage, op: PreprocessOp): PixelImage {
   return out;
 }
 
+function threshold(img: PixelImage, op: PreprocessOp): PixelImage {
+  const t = clamp01(op.params.threshold ?? 0.5);
+  const soft = Math.max(0, op.params.softness ?? 0);
+  const out = cloneImage(img);
+  for (let i = 0; i < out.data.length; i += 4) {
+    const luma =
+      (out.data[i] * 0.2126 + out.data[i + 1] * 0.7152 + out.data[i + 2] * 0.0722) / 255;
+    let v = luma;
+    if (soft <= 0.0001) {
+      v = luma >= t ? 1 : 0;
+    } else {
+      v = clamp01((luma - (t - soft)) / (2 * soft));
+    }
+    out.data[i] = Math.round(v * 255);
+    out.data[i + 1] = Math.round(v * 255);
+    out.data[i + 2] = Math.round(v * 255);
+  }
+  return out;
+}
+
 function displace(img: PixelImage, op: PreprocessOp, ctx: EffectContext): PixelImage {
   const scale = scaleOf(img, ctx);
   const amplitude = (op.params.amplitude ?? 3) * scale;
@@ -856,42 +923,47 @@ export function applyPostprocess(
   input: PixelImage,
   ops: PostprocessOp[],
   ctx: EffectContext,
+  masks?: Record<string, MaskData>,
 ): PixelImage {
-  const accelerated = globalEffectAccelerator?.('postprocess', input, ops, ctx);
+  const hasRegions = ops.some((op) => op.region?.enabled || op.maskId);
+  const accelerated = hasRegions ? null : globalEffectAccelerator?.('postprocess', input, ops, ctx);
   if (accelerated) return accelerated;
   let img = input;
   for (const op of ops) {
     if (!op.enabled) continue;
-    switch (op.type) {
-      case 'outline':
-        img = outline(img, op, ctx);
-        break;
-      case 'bloom':
-        img = bloom(img, op, { ...ctx, artWidth: img.width, artHeight: img.height });
-        break;
-      case 'grain':
-        img = grain(img, op, { ...ctx, artWidth: img.width, artHeight: img.height });
-        break;
-      case 'scanlines':
-        img = scanlines(img, op, ctx);
-        break;
-      case 'vignette':
-        img = vignette(img, op, ctx);
-        break;
-      case 'chromatic':
-        img = chromatic(img, op, ctx);
-        break;
-      case 'crt':
-        img = crt(img, op, ctx);
-        break;
-      case 'sharpen':
-        img = unsharpMask(img, Math.max(0.5, op.params.radius ?? 1), op.params.amount ?? 0.7);
-        break;
-      default:
-        break;
+    const mask = resolveOpMask(op, masks, img.width, img.height);
+    if (mask) {
+      const before = cloneImage(img);
+      img = applyPostOp(img, op, ctx);
+      img = restrictToMask(before, img, mask);
+    } else {
+      img = applyPostOp(img, op, ctx);
     }
   }
   return img;
+}
+
+function applyPostOp(img: PixelImage, op: PostprocessOp, ctx: EffectContext): PixelImage {
+  switch (op.type) {
+    case 'outline':
+      return outline(img, op, ctx);
+    case 'bloom':
+      return bloom(img, op, { ...ctx, artWidth: img.width, artHeight: img.height });
+    case 'grain':
+      return grain(img, op, { ...ctx, artWidth: img.width, artHeight: img.height });
+    case 'scanlines':
+      return scanlines(img, op, ctx);
+    case 'vignette':
+      return vignette(img, op, ctx);
+    case 'chromatic':
+      return chromatic(img, op, ctx);
+    case 'crt':
+      return crt(img, op, ctx);
+    case 'sharpen':
+      return unsharpMask(img, Math.max(0.5, op.params.radius ?? 1), op.params.amount ?? 0.7);
+    default:
+      return img;
+  }
 }
 
 function outline(img: PixelImage, op: EffectOpFields, ctx: EffectContext): PixelImage {
