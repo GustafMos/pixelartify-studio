@@ -1523,6 +1523,30 @@ input[type="range"]::-moz-range-thumb {
   right: -5px;
 }
 
+.node-group-port-row {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 22px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 7px;
+  font-size: 9px;
+  color: var(--muted);
+}
+
+.node-group-port-row.node-group-port-out {
+  justify-content: flex-end;
+}
+
+.node-group-port-row span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 130px;
+}
+
 .motion-readout {
   margin-top: 6px;
   padding: 6px 8px;
@@ -4648,4 +4672,42 @@ kbd {
   border: 1px solid var(--line);
   border-radius: 2px;
   padding: 2px 6px;
+}
+
+.subgraph-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.subgraph-insert {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0;
+  background: transparent;
+  border: 0;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  min-width: 0;
+}
+
+.subgraph-delete {
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  background: transparent;
+  border: 0;
+  border-radius: 2px;
+  color: var(--dim);
+  cursor: pointer;
+}
+
+.subgraph-delete:hover {
+  color: var(--red);
+  background: rgba(239, 71, 111, 0.1);
 }

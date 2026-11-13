@@ -19,6 +19,9 @@ const PORT_DOT_INSET = 9;
 const PORT_ROW_CENTER = 11;
 const GROUP_WIDTH = 220;
 const GROUP_HEIGHT = 112;
+const GROUP_HEAD_H = 46;
+const GROUP_BODY_H = 34;
+const GROUP_PORT_START = GROUP_HEAD_H + GROUP_BODY_H;
 
 export const TYPE_ICON: Record<GraphNodeType, IconName> = {
   input: 'image',
@@ -78,6 +81,53 @@ function pinnedFieldList(node: GraphNode): Array<{ path: string; label: string }
       path,
       label: path.split('.').pop()?.replace(/[_-]/g, ' ') ?? path,
     }));
+}
+
+interface GroupBoundaryPort {
+  key: string;
+  nodeId: string;
+  portId: string;
+  type: string;
+  label: string;
+}
+
+/** Boundary ports of a collapsed group: inputs from outside, outputs to outside. */
+function groupBoundaryPorts(
+  graph: PipelineGraph,
+  group: GraphNode,
+): { inPorts: GroupBoundaryPort[]; outPorts: GroupBoundaryPort[] } {
+  const ids = new Set(Array.isArray(group.params.nodeIds) ? (group.params.nodeIds as string[]) : []);
+  const byId = new Map(graph.nodes.map((n) => [n.id, n]));
+  const inPorts: GroupBoundaryPort[] = [];
+  const outPorts: GroupBoundaryPort[] = [];
+  const seenIn = new Set<string>();
+  const seenOut = new Set<string>();
+  for (const edge of graph.edges) {
+    const fromInternal = ids.has(edge.fromNode);
+    const toInternal = ids.has(edge.toNode);
+    if (fromInternal && !toInternal) {
+      const node = byId.get(edge.fromNode);
+      const port = node ? NODE_DEFS[node.type].outputs.find((p) => p.id === edge.fromPort) : undefined;
+      if (port) {
+        const key = `${edge.fromNode}:${edge.fromPort}`;
+        if (!seenOut.has(key)) {
+          seenOut.add(key);
+          outPorts.push({ key, nodeId: edge.fromNode, portId: edge.fromPort, type: port.type, label: port.label });
+        }
+      }
+    } else if (!fromInternal && toInternal) {
+      const node = byId.get(edge.toNode);
+      const port = node ? NODE_DEFS[node.type].inputs.find((p) => p.id === edge.toPort) : undefined;
+      if (port) {
+        const key = `${edge.toNode}:${edge.toPort}`;
+        if (!seenIn.has(key)) {
+          seenIn.add(key);
+          inPorts.push({ key, nodeId: edge.toNode, portId: edge.toPort, type: port.type, label: port.label });
+        }
+      }
+    }
+  }
+  return { inPorts, outPorts };
 }
 
 function summaryFor(node: GraphNode, assetCount: number): string {
@@ -213,6 +263,9 @@ interface LinkState {
   type: string;
   x: number;
   y: number;
+  /** Visual origin (graph space) for the temp wire; defaults to the node port. */
+  originX: number;
+  originY: number;
   startX: number;
   startY: number;
   moved: boolean;
@@ -288,6 +341,9 @@ export function GraphCanvas(): React.ReactElement {
     updateNode,
     updateNodeParams,
     setGraphCursor,
+    subgraphs,
+    insertSubgraph,
+    deleteSubgraph,
     mode,
   } = useStudio();
 
@@ -358,6 +414,23 @@ export function GraphCanvas(): React.ReactElement {
     return map;
   }, [collapsedGroups]);
   const hiddenNodeIds = useMemo(() => new Set(collapsedGroupFor.keys()), [collapsedGroupFor]);
+
+  // Boundary ports for every collapsed group, used for both the port dots and
+  // the edge line anchor positions.
+  const groupPorts = useMemo(() => {
+    const map = new Map<string, { inPorts: GroupBoundaryPort[]; outPorts: GroupBoundaryPort[] }>();
+    for (const group of collapsedGroups) {
+      map.set(group.id, groupBoundaryPorts(graph, group));
+    }
+    return map;
+  }, [graph, collapsedGroups]);
+
+  const groupPortY = (index: number): number => GROUP_PORT_START + index * PORT_STEP + PORT_ROW_CENTER;
+  const groupBoxHeight = (group: GraphNode): number => {
+    const ports = groupPorts.get(group.id);
+    const rows = ports ? Math.max(ports.inPorts.length, ports.outPorts.length) : 0;
+    return GROUP_HEAD_H + GROUP_BODY_H + rows * PORT_STEP + 14;
+  };
 
   const groupBounds = useCallback(
     (group: GraphNode): { x: number; y: number; width: number; height: number } => {
@@ -684,6 +757,7 @@ export function GraphCanvas(): React.ReactElement {
     type: string,
     e: React.PointerEvent,
     side: 'out' | 'in',
+    visual?: { x: number; y: number },
   ): void => {
     e.stopPropagation();
     e.preventDefault();
@@ -692,13 +766,23 @@ export function GraphCanvas(): React.ReactElement {
     const def = NODE_DEFS[node.type];
     const ports = side === 'out' ? def.outputs : def.inputs;
     const idx = ports.findIndex((p) => p.id === port);
+    const ox = visual
+      ? visual.x
+      : side === 'out'
+        ? pos.x + NODE_WIDTH - PORT_DOT_INSET
+        : pos.x + PORT_DOT_INSET;
+    const oy = visual
+      ? visual.y
+      : pos.y + HEADER_H + PORT_START + Math.max(0, idx) * PORT_STEP + PORT_ROW_CENTER;
     setLinkState({
       fromNode: node.id,
       fromPort: port,
       fromSide: side,
       type,
-      x: side === 'out' ? pos.x + NODE_WIDTH - PORT_DOT_INSET : pos.x + PORT_DOT_INSET,
-      y: pos.y + HEADER_H + PORT_START + Math.max(0, idx) * PORT_STEP + PORT_ROW_CENTER,
+      x: ox,
+      y: oy,
+      originX: ox,
+      originY: oy,
       startX: e.clientX,
       startY: e.clientY,
       moved: false,
@@ -820,6 +904,43 @@ export function GraphCanvas(): React.ReactElement {
                   </button>
                 );
               })}
+              {subgraphs.length > 0 ? (
+                <>
+                  <div className="node-search-group">Subgraphs</div>
+                  {subgraphs.map((sub) => (
+                    <div key={sub.id} className="add-node-item subgraph-row">
+                      <button
+                        type="button"
+                        className="subgraph-insert"
+                        onClick={() => {
+                          insertSubgraph(sub.id);
+                          setAddOpen(false);
+                          setAddSearch('');
+                        }}
+                      >
+                        <span className="add-node-icon" style={{ color: '#94a3b8' }}>
+                          <Icon name="layers" size={16} />
+                        </span>
+                        <span>
+                          <strong>{sub.name}</strong>
+                          <small>{sub.nodes.length} node{sub.nodes.length === 1 ? '' : 's'}</small>
+                        </span>
+                      </button>
+                      <button
+                        type="button"
+                        className="subgraph-delete"
+                        title="Delete subgraph"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          deleteSubgraph(sub.id);
+                        }}
+                      >
+                        <Icon name="close" size={13} />
+                      </button>
+                    </div>
+                  ))}
+                </>
+              ) : null}
             </div>
           </div>
         ) : null}
@@ -890,19 +1011,28 @@ export function GraphCanvas(): React.ReactElement {
               if (inIdx < 0) return null;
               const outPort = fromDef.outputs[outIdx];
               const inPort = NODE_DEFS[to.type].inputs[inIdx];
-              const socketOrder = ['media', 'mask', 'palette', 'motion', 'value'];
-              const outTypeIndex = Math.max(0, socketOrder.indexOf(outPort.type));
-              const inTypeIndex = Math.max(0, socketOrder.indexOf(inPort.type));
+              const fromPortIndex = fromGroup
+                ? (groupPorts.get(fromGroup.id)?.outPorts ?? []).findIndex(
+                    (p) => p.nodeId === edge.fromNode && p.portId === edge.fromPort,
+                  )
+                : -1;
+              const toPortIndex = toGroup
+                ? (groupPorts.get(toGroup.id)?.inPorts ?? []).findIndex(
+                    (p) => p.nodeId === edge.toNode && p.portId === edge.toPort,
+                  )
+                : -1;
               const x1 = fromGroupPos
                 ? fromGroupPos.x + GROUP_WIDTH - PORT_DOT_INSET
                 : fp.x + NODE_WIDTH - PORT_DOT_INSET;
-              const y1 = fromGroupPos
-                ? fromGroupPos.y + 46 + outTypeIndex * 12
-                : fp.y + HEADER_H + PORT_START + outIdx * PORT_STEP + PORT_ROW_CENTER;
+              const y1 =
+                fromGroupPos && fromPortIndex >= 0
+                  ? fromGroupPos.y + groupPortY(fromPortIndex)
+                  : fp.y + HEADER_H + PORT_START + outIdx * PORT_STEP + PORT_ROW_CENTER;
               const x2 = toGroupPos ? toGroupPos.x + PORT_DOT_INSET : tp.x + PORT_DOT_INSET;
-              const y2 = toGroupPos
-                ? toGroupPos.y + 46 + inTypeIndex * 12
-                : tp.y + HEADER_H + PORT_START + inIdx * PORT_STEP + PORT_ROW_CENTER;
+              const y2 =
+                toGroupPos && toPortIndex >= 0
+                  ? toGroupPos.y + groupPortY(toPortIndex)
+                  : tp.y + HEADER_H + PORT_START + inIdx * PORT_STEP + PORT_ROW_CENTER;
               const dx = Math.max(50, Math.abs(x2 - x1) * 0.45);
               const d = `M ${x1} ${y1} C ${x1 + dx} ${y1}, ${x2 - dx} ${y2}, ${x2} ${y2}`;
               const color = edgeColor(outPort.type);
@@ -954,17 +1084,9 @@ export function GraphCanvas(): React.ReactElement {
             })}
             {link
               ? (() => {
-                  const linkNode = graph.nodes.find((n) => n.id === link.fromNode);
-                  if (!linkNode) return null;
-                  const linkDef = NODE_DEFS[linkNode.type];
-                  const ports = link.fromSide === 'out' ? linkDef.outputs : linkDef.inputs;
-                  const idx = Math.max(0, ports.findIndex((p) => p.id === link.fromPort));
-                  const pos = effectivePositions.get(link.fromNode)!;
-                  const sx = link.fromSide === 'out' ? pos.x + NODE_WIDTH - PORT_DOT_INSET : pos.x + PORT_DOT_INSET;
-                  const sy = pos.y + HEADER_H + PORT_START + PORT_ROW_CENTER + idx * PORT_STEP;
                   return (
                     <path
-                      d={`M ${sx} ${sy} C ${link.x} ${link.y}, ${link.x} ${link.y}, ${link.x} ${link.y}`}
+                      d={`M ${link.originX} ${link.originY} C ${link.x} ${link.y}, ${link.x} ${link.y}, ${link.x} ${link.y}`}
                       stroke={edgeColor(link.type)}
                       className="edge-line edge-temp"
                     />
@@ -994,7 +1116,7 @@ export function GraphCanvas(): React.ReactElement {
                     onPointerDown={(e) => {
                       e.stopPropagation();
                       if ((e.target as HTMLElement).closest('button')) return;
-                      selectNode(group.id, e.ctrlKey || e.metaKey);
+                      selectNode(group.id, !(e.ctrlKey || e.metaKey));
                       setDrag({
                         id: group.id,
                         startClientX: e.clientX,
@@ -1026,27 +1148,26 @@ export function GraphCanvas(): React.ReactElement {
               );
             }
             const ids = Array.isArray(group.params.nodeIds) ? (group.params.nodeIds as string[]) : [];
-            const incoming = graph.edges.filter(
-              (edge) => ids.includes(edge.toNode) && !ids.includes(edge.fromNode),
-            );
-            const outgoing = graph.edges.filter(
-              (edge) => ids.includes(edge.fromNode) && !ids.includes(edge.toNode),
-            );
+            const ports = groupPorts.get(group.id) ?? { inPorts: [], outPorts: [] };
+            const inPorts = ports.inPorts;
+            const outPorts = ports.outPorts;
+            const boxPos = effectivePositions.get(group.id) ?? { x: group.x, y: group.y };
+            const internalNode = (id: string): GraphNode | undefined => graph.nodes.find((n) => n.id === id);
             return (
               <div
                 key={group.id}
                 className={`node-group-box ${selected ? 'is-selected' : ''}`}
                 style={{
-                  left: effectivePositions.get(group.id)?.x ?? group.x,
-                  top: effectivePositions.get(group.id)?.y ?? group.y,
+                  left: boxPos.x,
+                  top: boxPos.y,
                   width: GROUP_WIDTH,
-                  height: GROUP_HEIGHT,
+                  height: groupBoxHeight(group),
                   ['--node-accent' as string]: NODE_DEFS.group.accent,
                 }}
                 onPointerDown={(e) => {
                   e.stopPropagation();
-                  if ((e.target as HTMLElement).closest('button')) return;
-                  selectNode(group.id, e.ctrlKey || e.metaKey);
+                  if ((e.target as HTMLElement).closest('button, input, .node-group-port-row')) return;
+                  selectNode(group.id, !(e.ctrlKey || e.metaKey));
                   setDrag({
                     id: group.id,
                     startClientX: e.clientX,
@@ -1076,31 +1197,65 @@ export function GraphCanvas(): React.ReactElement {
                   </div>
                 </div>
                 <div className="node-group-body">
-                  <span>{incoming.length} in · {outgoing.length} out</span>
+                  <span>{inPorts.length} in · {outPorts.length} out</span>
                   <small>Collapsed group</small>
                 </div>
-                {['media', 'mask', 'palette', 'motion'].map((type, index) => {
-                  const hasIn = incoming.some((edge) => {
-                    const source = graph.nodes.find((n) => n.id === edge.fromNode);
-                    return source
-                      ? NODE_DEFS[source.type].outputs.find((p) => p.id === edge.fromPort)?.type === type
-                      : false;
-                  });
-                  const hasOut = outgoing.some((edge) => {
-                    const target = graph.nodes.find((n) => n.id === edge.toNode);
-                    return target
-                      ? NODE_DEFS[target.type].inputs.find((p) => p.id === edge.toPort)?.type === type
-                      : false;
-                  });
+                {inPorts.map((port, i) => {
+                  const node = internalNode(port.nodeId);
+                  if (!node) return null;
                   return (
-                    <span key={type}>
-                      {hasIn ? (
-                        <i className={`node-group-port node-group-port-in port-${type}`} style={{ top: 46 + index * 12 }} />
-                      ) : null}
-                      {hasOut ? (
-                        <i className={`node-group-port node-group-port-out port-${type}`} style={{ top: 46 + index * 12 }} />
-                      ) : null}
-                    </span>
+                    <div
+                      key={`in-${port.key}`}
+                      className={`node-group-port-row node-group-port-in port-${port.type}`}
+                      style={{ top: groupPortY(i) }}
+                      data-port-in="true"
+                      data-node-id={port.nodeId}
+                      data-port-id={port.portId}
+                      data-port-type={port.type}
+                      onPointerUp={() => finishLink(port.nodeId, port.portId, port.type, 'in')}
+                    >
+                      <button
+                        type="button"
+                        className={`port-dot port-${port.type}`}
+                        title={`Drag from ${port.label} (${port.type})`}
+                        onPointerDown={(e) =>
+                          startLink(node, port.portId, port.type, e, 'in', {
+                            x: boxPos.x + PORT_DOT_INSET,
+                            y: boxPos.y + groupPortY(i),
+                          })
+                        }
+                      />
+                      <span>{port.label}</span>
+                    </div>
+                  );
+                })}
+                {outPorts.map((port, i) => {
+                  const node = internalNode(port.nodeId);
+                  if (!node) return null;
+                  return (
+                    <div
+                      key={`out-${port.key}`}
+                      className={`node-group-port-row node-group-port-out port-${port.type}`}
+                      style={{ top: groupPortY(i) }}
+                      data-port-out-row="true"
+                      data-node-id={port.nodeId}
+                      data-port-id={port.portId}
+                      data-port-type={port.type}
+                      onPointerUp={() => finishLink(port.nodeId, port.portId, port.type, 'out')}
+                    >
+                      <span>{port.label}</span>
+                      <button
+                        type="button"
+                        className={`port-dot port-${port.type}`}
+                        title={`Drag from ${port.label} (${port.type})`}
+                        onPointerDown={(e) =>
+                          startLink(node, port.portId, port.type, e, 'out', {
+                            x: boxPos.x + GROUP_WIDTH - PORT_DOT_INSET,
+                            y: boxPos.y + groupPortY(i),
+                          })
+                        }
+                      />
+                    </div>
                   );
                 })}
               </div>
@@ -1132,7 +1287,7 @@ export function GraphCanvas(): React.ReactElement {
                 }}
                 onPointerDown={(e) => {
                   e.stopPropagation();
-                  selectNode(node.id, e.ctrlKey || e.metaKey);
+                  selectNode(node.id, !(e.ctrlKey || e.metaKey));
                 }}
               >
                 <div
@@ -1140,7 +1295,7 @@ export function GraphCanvas(): React.ReactElement {
                   onPointerDown={(e) => {
                     e.stopPropagation();
                     if ((e.target as HTMLElement).closest('button')) return;
-                    selectNode(node.id, e.ctrlKey || e.metaKey);
+                    selectNode(node.id, !(e.ctrlKey || e.metaKey));
                     detachedRef.current = null;
                     setDrag({
                       id: node.id,
@@ -1316,8 +1471,8 @@ export function GraphCanvas(): React.ReactElement {
 
         <div className="graph-hint">
           <Icon name="graph" size={14} />
-          Drag nodes · drop a node on a wire to insert it · drag an output to any input row (or click
-          output, then input) · wheel to zoom · hover a wire to cut it · Shift-drag detaches · Shift+Space node search ·{' '}
+          Click nodes to multi-select · Ctrl/Cmd-click to select one · drag a title bar to move ·
+          drop a node on a wire to insert it · wheel to zoom · hover a wire to cut it · Shift-drag detaches · Shift+Space node search ·{' '}
           <span className="hint-warning">!</span> marks CPU-bound nodes
           {mode === 'graph' ? ' · click nodes to preview that stage' : ''}
         </div>

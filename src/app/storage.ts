@@ -1,4 +1,4 @@
-import type { GraphNodeType, PaletteDefinition, PipelineGraph, Preset } from '../core/types';
+import type { GraphEdge, GraphNode, GraphNodeType, PaletteDefinition, PipelineGraph, Preset } from '../core/types';
 import { parsePreset } from '../core/presets';
 
 const PREFIX = 'pixelartify.studio.v1';
@@ -124,5 +124,35 @@ export function loadColorSpace(): ColorSpaceOption {
 
 export function saveColorSpace(colorSpace: ColorSpaceOption): void {
   saveJSON('colorSpace', colorSpace);
+}
+
+/** A reusable group of nodes saved by the user. */
+export interface Subgraph {
+  id: string;
+  name: string;
+  nodes: GraphNode[];
+  edges: GraphEdge[];
+}
+
+export function loadSubgraphs(): Subgraph[] {
+  const raw = loadJSON<unknown[]>('subgraphs', []);
+  if (!Array.isArray(raw)) return [];
+  const out: Subgraph[] = [];
+  for (const item of raw) {
+    if (!item || typeof item !== 'object') continue;
+    const obj = item as Partial<Subgraph>;
+    if (!Array.isArray(obj.nodes) || !Array.isArray(obj.edges)) continue;
+    out.push({
+      id: typeof obj.id === 'string' ? obj.id : `subgraph-${Math.random().toString(36).slice(2, 8)}`,
+      name: typeof obj.name === 'string' ? obj.name : 'Subgraph',
+      nodes: obj.nodes as GraphNode[],
+      edges: obj.edges as GraphEdge[],
+    });
+  }
+  return out;
+}
+
+export function saveSubgraphs(subgraphs: Subgraph[]): void {
+  saveJSON('subgraphs', subgraphs);
 }
 

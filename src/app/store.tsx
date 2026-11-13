@@ -46,7 +46,7 @@ import {
   type GraphAsset,
   type GraphMediaItem,
 } from '../core/graph';
-import { loadGraph, saveGraph, loadUserPresets, saveUserPresets, loadUserPalettes, saveUserPalettes, loadActivePaletteId, saveActivePaletteId, loadUiMode, saveUiMode, loadRecentNodes, saveRecentNodes, loadColorSpace, saveColorSpace, type ColorSpaceOption } from './storage';
+import { loadGraph, saveGraph, loadUserPresets, saveUserPresets, loadUserPalettes, saveUserPalettes, loadActivePaletteId, saveActivePaletteId, loadUiMode, saveUiMode, loadRecentNodes, saveRecentNodes, loadColorSpace, saveColorSpace, loadSubgraphs, saveSubgraphs, type ColorSpaceOption, type Subgraph } from './storage';
 import {
   decodeImageFile,
   downloadText,
@@ -147,6 +147,10 @@ interface StudioContextValue {
   toasts: Toast[];
   colorSpace: ColorSpaceOption;
   setColorSpace: (cs: ColorSpaceOption) => void;
+  subgraphs: Subgraph[];
+  saveGroupAsSubgraph: (groupId: string, name: string) => void;
+  deleteSubgraph: (id: string) => void;
+  insertSubgraph: (id: string) => void;
   setMode: (mode: 'studio' | 'split' | 'graph') => void;
   selectNode: (id: string | null, additive?: boolean) => void;
   setSelectedOutput: (id: string) => void;
@@ -219,6 +223,13 @@ const StudioContext = createContext<StudioContextValue | null>(null);
 const uid = (prefix: string): string =>
   `${prefix}-${Math.random().toString(36).slice(2, 9)}-${Date.now().toString(36).slice(-4)}`;
 
+function subMinX(sub: Subgraph): number {
+  return sub.nodes.length ? Math.min(...sub.nodes.map((n) => n.x)) : 0;
+}
+function subMinY(sub: Subgraph): number {
+  return sub.nodes.length ? Math.min(...sub.nodes.map((n) => n.y)) : 0;
+}
+
 export function StudioProvider({ children }: { children: React.ReactNode }): React.ReactElement {
   const [graph, setGraph] = useState<PipelineGraph>(() => {
     const stored = loadGraph();
@@ -257,6 +268,7 @@ export function StudioProvider({ children }: { children: React.ReactNode }): Rea
   const [trackedMasks, setTrackedMasks] = useState<Record<string, TrackedMaskSequence>>({});
   const [paletteStudioOpen, setPaletteStudioOpen] = useState(false);
   const [colorSpace, setColorSpaceState] = useState<ColorSpaceOption>(() => loadColorSpace());
+  const [subgraphs, setSubgraphs] = useState<Subgraph[]>(() => loadSubgraphs());
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [isExporting, setIsExporting] = useState(false);
   const [exportProgress, setExportProgress] = useState<string | null>(null);
@@ -558,6 +570,9 @@ export function StudioProvider({ children }: { children: React.ReactNode }): Rea
   useEffect(() => {
     saveColorSpace(colorSpace);
   }, [colorSpace]);
+  useEffect(() => {
+    saveSubgraphs(subgraphs);
+  }, [subgraphs]);
 
   // Video preview frame extraction.
   useEffect(() => {
@@ -926,6 +941,56 @@ export function StudioProvider({ children }: { children: React.ReactNode }): Rea
     setSelectedNodeId(null);
     setSelectedNodeIds([]);
   }, [mutateGraph]);
+
+  /** Save a group (and its internal wiring) as a reusable subgraph. */
+  const saveGroupAsSubgraph = useCallback((groupId: string, name: string) => {
+    const group = graph.nodes.find((n) => n.id === groupId && n.type === 'group');
+    if (!group) return;
+    const trimmed = name.trim();
+    if (!trimmed) {
+      notify('Subgraph needs a name.', 'warn');
+      return;
+    }
+    const ids = Array.isArray(group.params.nodeIds) ? (group.params.nodeIds as string[]) : [];
+    const members = graph.nodes.filter((n) => ids.includes(n.id) && n.type !== 'group');
+    if (members.length === 0) {
+      notify('This group has no members to save.', 'warn');
+      return;
+    }
+    const idSet = new Set(ids);
+    const internalEdges = graph.edges.filter((e) => idSet.has(e.fromNode) && idSet.has(e.toNode));
+    const subgraph: Subgraph = {
+      id: `subgraph-${Math.random().toString(36).slice(2, 9)}`,
+      name: trimmed,
+      nodes: deepClone(members),
+      edges: deepClone(internalEdges),
+    };
+    setSubgraphs((prev) => [...prev.filter((s) => s.name !== trimmed), subgraph]);
+    notify(`Saved subgraph “${trimmed}” (${members.length} nodes).`, 'success');
+  }, [graph, notify]);
+
+  const deleteSubgraph = useCallback((id: string) => {
+    setSubgraphs((prev) => prev.filter((s) => s.id !== id));
+  }, []);
+
+  /** Insert a saved subgraph at the cursor (or the graph origin). */
+  const insertSubgraph = useCallback((id: string) => {
+    const sub = subgraphs.find((s) => s.id === id);
+    if (!sub) return;
+    const cursor = graphCursorRef.current ?? { x: 120, y: 120 };
+    const idMap = new Map<string, string>();
+    const nodes = sub.nodes.map((n) => {
+      const clone = { ...deepClone(n), id: uid(n.type), x: n.x + cursor.x - subMinX(sub), y: n.y + cursor.y - subMinY(sub) };
+      idMap.set(n.id, clone.id);
+      return clone;
+    });
+    const edges = sub.edges
+      .filter((e) => idMap.has(e.fromNode) && idMap.has(e.toNode))
+      .map((e) => ({ ...deepClone(e), id: uid('edge'), fromNode: idMap.get(e.fromNode)!, toNode: idMap.get(e.toNode)! }));
+    mutateGraph((g) => ({ ...g, nodes: [...g.nodes, ...nodes], edges: [...g.edges, ...edges] }));
+    if (nodes.length > 0) setSelectedNodeId(nodes[0].id);
+    notify(`Inserted subgraph “${sub.name}”.`, 'success');
+  }, [subgraphs, mutateGraph, notify]);
 
   const setGroupExpanded = useCallback((id: string, expanded: boolean) => {
     mutateGraph((g) => {
@@ -1867,6 +1932,10 @@ export function StudioProvider({ children }: { children: React.ReactNode }): Rea
     toasts,
     colorSpace,
     setColorSpace,
+    subgraphs,
+    saveGroupAsSubgraph,
+    deleteSubgraph,
+    insertSubgraph,
     setMode,
     selectNode,
     setSelectedOutput,

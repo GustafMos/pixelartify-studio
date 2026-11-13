@@ -3,7 +3,7 @@ import { NODE_DEFS } from '../../core/graph';
 import type { GraphNode } from '../../core/types';
 import { useStudio } from '../store';
 import { nodeCpuWarning } from '../bottlenecks';
-import { Badge, EmptyState, IconButton } from './controls';
+import { Badge, EmptyState, IconButton, TextField } from './controls';
 import { Icon } from './icons';
 import { InputPanel } from './inspectors/InputPanel';
 import { CropPanel, ResizePanel, ChannelsPanel } from './inspectors/GeometryPanels';
@@ -186,7 +186,7 @@ function renderPanel(node: GraphNode): React.ReactElement {
 }
 
 function GroupPanel({ node }: { node: GraphNode }): React.ReactElement {
-  const { graph, duplicateGroup, ungroup, setGroupExpanded } = useStudio();
+  const { graph, duplicateGroup, ungroup, setGroupExpanded, updateNode, saveGroupAsSubgraph } = useStudio();
   const ids = Array.isArray(node.params.nodeIds) ? (node.params.nodeIds as string[]) : [];
   const members = graph.nodes.filter((n) => ids.includes(n.id) && n.type !== 'group');
   const expanded = node.params.expanded !== false;
@@ -202,12 +202,20 @@ function GroupPanel({ node }: { node: GraphNode }): React.ReactElement {
           <strong>{expanded ? 'expanded' : 'collapsed'}</strong>
         </div>
       </div>
+      <TextField
+        label="Group name"
+        value={node.title}
+        onChange={(title) => updateNode(node.id, { title })}
+      />
       <div className="btn-column">
         <button type="button" className="ghost-btn small" onClick={() => setGroupExpanded(node.id, !expanded)}>
           <Icon name={expanded ? 'minus' : 'plus'} size={14} /> {expanded ? 'Collapse group' : 'Expand group'}
         </button>
         <button type="button" className="ghost-btn small" onClick={() => duplicateGroup(node.id)}>
           <Icon name="copy" size={14} /> Duplicate whole group
+        </button>
+        <button type="button" className="ghost-btn small" onClick={() => saveGroupAsSubgraph(node.id, node.title)}>
+          <Icon name="save" size={14} /> Save as subgraph
         </button>
         <button type="button" className="ghost-btn small danger" onClick={() => ungroup(node.id)}>
           <Icon name="close" size={14} /> Ungroup
@@ -218,7 +226,8 @@ function GroupPanel({ node }: { node: GraphNode }): React.ReactElement {
         <span>
           A group is an organisational box. Its members keep their normal wires and still evaluate
           independently. Collapse it to a single box with combined input and output dots, or
-          duplicate it to clone every member node and internal wire at once.
+          duplicate it to clone every member node and internal wire at once. Rename it above and
+          save it as a reusable subgraph.
         </span>
       </div>
       {members.length === 0 ? <p className="micro-copy">This group no longer has members.</p> : null}
