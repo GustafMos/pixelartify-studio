@@ -15,7 +15,7 @@ import { GPU_MIN_LAYER_PIXELS, gpuLayersAvailable } from '../gpuLayers';
 import { Icon } from './icons';
 import { Badge, IconButton, Segmented, Slider, Spinner } from './controls';
 import { TransformGizmo } from './TransformGizmo';
-import { toggleViewerWindow, postArtToViewer, isViewerWindowOpen } from '../viewerWindow';
+import { toggleViewerWindow, postArtToViewer, postPlaybackToViewer, onViewerControl, onViewerReady, isViewerWindowOpen } from '../viewerWindow';
 
 export function Viewer({ resizeKey }: { resizeKey?: number | string } = {}): React.ReactElement {
   const {
@@ -155,11 +155,57 @@ export function Viewer({ resizeKey }: { resizeKey?: number | string } = {}): Rea
     if (art) paintArt(art);
   }, [art, paintArt]);
 
-  // Push the current frame to the popped-out window whenever it opens or the
-  // art changes (the paint path only fires on new renders).
+  // Push the current frame + playback state to the popped-out window.
+  const isVideoAsset = activeAsset?.kind === 'video';
   useEffect(() => {
-    if (popped && art) postArtToViewer(art);
-  }, [popped, art]);
+    if (!popped) return;
+    if (art) postArtToViewer(art);
+    postPlaybackToViewer({
+      playing: isVideoAsset ? videoPlaying : animationPlaying,
+      time: isVideoAsset ? videoTime : animationTime,
+      duration: isVideoAsset ? activeAsset?.duration ?? 0 : animationDuration,
+      hasTimeline: Boolean(isVideoAsset || hasAnimation),
+      loop: animationLoop,
+      fps: isVideoAsset ? activeAsset?.fps ?? 24 : animationFps,
+      isVideo: Boolean(isVideoAsset),
+    });
+  }, [
+    popped,
+    art,
+    isVideoAsset,
+    videoPlaying,
+    animationPlaying,
+    videoTime,
+    animationTime,
+    activeAsset?.duration,
+    activeAsset?.fps,
+    animationDuration,
+    animationLoop,
+    animationFps,
+    hasAnimation,
+  ]);
+
+  // Handle play/pause/seek controls coming back from the popup, and push the
+  // current frame as soon as the popup reports ready.
+  useEffect(() => {
+    if (!popped) return;
+    const unsubControl = onViewerControl((control) => {
+      if (control.action === 'toggle') {
+        if (isVideoAsset) setVideoPlaying(!videoPlaying);
+        else setAnimationPlaying(!animationPlaying);
+      } else if (control.action === 'seek' && control.time !== undefined) {
+        if (isVideoAsset) setVideoTime(control.time);
+        else setAnimationTime(control.time);
+      }
+    });
+    const unsubReady = onViewerReady(() => {
+      if (art) postArtToViewer(art);
+    });
+    return () => {
+      unsubControl();
+      unsubReady();
+    };
+  }, [popped, isVideoAsset, videoPlaying, animationPlaying, art, setVideoPlaying, setAnimationPlaying, setVideoTime, setAnimationTime]);
 
   // Set up a hidden <video> used for smooth playback. The normal preview path
   // still decodes through Mediabunny; playback bypasses it to avoid opening a

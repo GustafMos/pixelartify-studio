@@ -1,8 +1,7 @@
 /**
- * Pop-out viewer: opens the live preview in a separate browser window so it can
- * sit on a second monitor while the node graph is edited. Frames are pushed to
- * the popup via postMessage as PNG data URLs (the popup scales with pixelated
- * rendering, so art stays crisp).
+ * Pop-out viewer: opens the live preview in a separate browser window (the app
+ * served at `?viewer=1`). Frames and playback state are pushed via postMessage;
+ * play/pause/seek controls come back the same way.
  */
 
 import type { PixelImage } from '../core/types';
@@ -10,34 +9,15 @@ import { pixelImageToDataUrl } from './io';
 
 let viewerWindow: Window | null = null;
 
-const POPUP_HTML = `<!doctype html>
-<html>
-<head>
-<meta charset="utf-8">
-<title>PixelArtify — Viewer</title>
-<style>
-  html, body { margin: 0; height: 100%; background: #141414; overflow: hidden; }
-  body { display: flex; align-items: center; justify-content: center; }
-  #wrap { position: relative; max-width: 100vw; max-height: 100vh; }
-  img { display: block; max-width: 100vw; max-height: 100vh; object-fit: contain; image-rendering: pixelated; }
-  #meta { position: fixed; left: 10px; bottom: 10px; color: #9a9a9a; font: 11px ui-monospace, monospace; }
-  .checker { background-image: conic-gradient(#222 25%, #1a1a1a 0 50%, #222 0 75%, #1a1a1a 0); background-size: 20px 20px; }
-</style>
-</head>
-<body>
-  <div id="wrap" class="checker"><img id="art" alt="preview"></div>
-  <div id="meta">PixelArtify viewer</div>
-  <script>
-    var art = document.getElementById('art');
-    var meta = document.getElementById('meta');
-    window.addEventListener('message', function (e) {
-      if (!e.data || e.data.type !== 'pixelartify-art') return;
-      art.src = e.data.url;
-      meta.textContent = e.data.width + ' × ' + e.data.height + ' px';
-    });
-  </script>
-</body>
-</html>`;
+export interface ViewerPlaybackState {
+  playing: boolean;
+  time: number;
+  duration: number;
+  hasTimeline: boolean;
+  loop: boolean;
+  fps: number;
+  isVideo: boolean;
+}
 
 export function isViewerWindowOpen(): boolean {
   return Boolean(viewerWindow && !viewerWindow.closed);
@@ -49,35 +29,63 @@ export function toggleViewerWindow(): boolean {
     viewerWindow = null;
     return false;
   }
+  const url = `${window.location.origin}${window.location.pathname}?viewer=1`;
   const win = window.open(
-    '',
+    url,
     'pixelartify-viewer',
     'width=760,height=560,menubar=no,toolbar=no,location=no,status=no,resizable=yes',
   );
   if (!win) return false;
-  try {
-    win.document.open();
-    win.document.write(POPUP_HTML);
-    win.document.close();
-  } catch {
-    return false;
-  }
   viewerWindow = win;
   return true;
 }
 
-/** Push a rendered frame to the popup. Cheap no-op when the window is closed. */
-export function postArtToViewer(image: PixelImage): void {
+function post(msg: Record<string, unknown>): void {
   if (!viewerWindow || viewerWindow.closed) {
     viewerWindow = null;
     return;
   }
   try {
-    viewerWindow.postMessage(
-      { type: 'pixelartify-art', url: pixelImageToDataUrl(image), width: image.width, height: image.height },
-      '*',
-    );
+    viewerWindow.postMessage(msg, '*');
   } catch {
-    // Popup may be navigating; ignore.
+    // Window may be navigating; ignore.
   }
+}
+
+/** Push a rendered frame to the popup. Cheap no-op when the window is closed. */
+export function postArtToViewer(image: PixelImage): void {
+  if (!viewerWindow || viewerWindow.closed) return;
+  post({ type: 'art', url: pixelImageToDataUrl(image), width: image.width, height: image.height });
+}
+
+export function postPlaybackToViewer(state: ViewerPlaybackState): void {
+  if (!viewerWindow || viewerWindow.closed) return;
+  post({ type: 'playback', ...state });
+}
+
+export interface ViewerControl {
+  action: 'toggle' | 'seek';
+  time?: number;
+}
+
+/** Subscribe to control messages (play/pause/seek) from the popup. Returns an unsubscribe fn. */
+export function onViewerControl(handler: (control: ViewerControl) => void): () => void {
+  const listener = (e: MessageEvent): void => {
+    const d = e.data;
+    if (d && typeof d === 'object' && d.type === 'control') {
+      handler(d as ViewerControl);
+    }
+  };
+  window.addEventListener('message', listener);
+  return () => window.removeEventListener('message', listener);
+}
+
+/** Subscribe to the popup's ready signal so current state can be pushed on open. */
+export function onViewerReady(handler: () => void): () => void {
+  const listener = (e: MessageEvent): void => {
+    const d = e.data;
+    if (d && typeof d === 'object' && d.type === 'ready') handler();
+  };
+  window.addEventListener('message', listener);
+  return () => window.removeEventListener('message', listener);
 }

@@ -2,6 +2,7 @@ import React from 'react';
 import { createRoot } from 'react-dom/client';
 import { StudioProvider } from './store';
 import { App } from './App';
+import { PopupViewer } from './PopupViewer';
 import { setGlobalPixelator, setGlobalDitherFinisher, setGlobalLayerCompositor } from '../core/pipeline';
 import { setGlobalResizer } from '../core/image';
 import { setGlobalEffectAccelerator } from '../core/preprocess';
@@ -49,12 +50,19 @@ class ErrorBoundary extends React.Component<
 
 const root = document.getElementById('root');
 if (!root) throw new Error('Root element missing.');
+
+const isViewer = new URLSearchParams(window.location.search).has('viewer');
+
 createRoot(root).render(
   <React.StrictMode>
     <ErrorBoundary>
-      <StudioProvider>
-        <App />
-      </StudioProvider>
+      {isViewer ? (
+        <PopupViewer />
+      ) : (
+        <StudioProvider>
+          <App />
+        </StudioProvider>
+      )}
     </ErrorBoundary>
   </React.StrictMode>,
 );
