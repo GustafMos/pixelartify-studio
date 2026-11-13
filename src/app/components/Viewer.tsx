@@ -155,6 +155,12 @@ export function Viewer({ resizeKey }: { resizeKey?: number | string } = {}): Rea
     if (art) paintArt(art);
   }, [art, paintArt]);
 
+  // Push the current frame to the popped-out window whenever it opens or the
+  // art changes (the paint path only fires on new renders).
+  useEffect(() => {
+    if (popped && art) postArtToViewer(art);
+  }, [popped, art]);
+
   // Set up a hidden <video> used for smooth playback. The normal preview path
   // still decodes through Mediabunny; playback bypasses it to avoid opening a
   // decoder for every displayed frame.
