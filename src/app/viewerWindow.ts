@@ -1,12 +1,22 @@
 /**
  * Pop-out viewer: opens the live preview in a separate browser window (the app
- * served at `?viewer=1`). Frames and playback state are pushed via postMessage;
- * play/pause/seek controls come back the same way.
+ * served at `?viewer=1`). Frames, playback state and controls travel over a
+ * BroadcastChannel, which is reliable across same-origin windows without
+ * depending on the opener relationship.
  */
 
 import type { PixelImage } from '../core/types';
 
+const CHANNEL_NAME = 'pixelartify-viewer';
+
 let viewerWindow: Window | null = null;
+let channel: BroadcastChannel | null = null;
+let lastArtPush = 0;
+
+function getChannel(): BroadcastChannel {
+  if (!channel) channel = new BroadcastChannel(CHANNEL_NAME);
+  return channel;
+}
 
 export interface ViewerPlaybackState {
   playing: boolean;
@@ -36,22 +46,9 @@ export function toggleViewerWindow(): boolean {
   );
   if (!win) return false;
   viewerWindow = win;
+  lastArtPush = 0;
   return true;
 }
-
-function post(msg: Record<string, unknown>): void {
-  if (!viewerWindow || viewerWindow.closed) {
-    viewerWindow = null;
-    return;
-  }
-  try {
-    viewerWindow.postMessage(msg, '*');
-  } catch {
-    // Window may be navigating; ignore.
-  }
-}
-
-let lastArtPush = 0;
 
 /** Push a rendered frame to the popup. Cheap no-op when the window is closed. */
 export function postArtToViewer(image: PixelImage): void {
@@ -63,20 +60,19 @@ export function postArtToViewer(image: PixelImage): void {
   if (now - lastArtPush < 33) return; // throttle to ~30 fps
   lastArtPush = now;
   try {
-    // Send raw RGBA (structured-cloned) rather than an encoded image — the
-    // popup draws it straight to a canvas, avoiding per-frame PNG encode/decode.
-    viewerWindow.postMessage(
-      { type: 'art', width: image.width, height: image.height, data: image.data },
-      '*',
-    );
+    getChannel().postMessage({ type: 'art', width: image.width, height: image.height, data: image.data });
   } catch {
-    // Window may be navigating; ignore.
+    // Ignore transient errors.
   }
 }
 
 export function postPlaybackToViewer(state: ViewerPlaybackState): void {
   if (!viewerWindow || viewerWindow.closed) return;
-  post({ type: 'playback', ...state });
+  try {
+    getChannel().postMessage({ type: 'playback', ...state });
+  } catch {
+    // Ignore.
+  }
 }
 
 export interface ViewerControl {
@@ -84,24 +80,24 @@ export interface ViewerControl {
   time?: number;
 }
 
-/** Subscribe to control messages (play/pause/seek) from the popup. Returns an unsubscribe fn. */
+/** Subscribe to control messages (play/pause/seek) from the popup. */
 export function onViewerControl(handler: (control: ViewerControl) => void): () => void {
+  const ch = getChannel();
   const listener = (e: MessageEvent): void => {
     const d = e.data;
-    if (d && typeof d === 'object' && d.type === 'control') {
-      handler(d as ViewerControl);
-    }
+    if (d && typeof d === 'object' && d.type === 'control') handler(d as ViewerControl);
   };
-  window.addEventListener('message', listener);
-  return () => window.removeEventListener('message', listener);
+  ch.addEventListener('message', listener);
+  return () => ch.removeEventListener('message', listener);
 }
 
 /** Subscribe to the popup's ready signal so current state can be pushed on open. */
 export function onViewerReady(handler: () => void): () => void {
+  const ch = getChannel();
   const listener = (e: MessageEvent): void => {
     const d = e.data;
     if (d && typeof d === 'object' && d.type === 'ready') handler();
   };
-  window.addEventListener('message', listener);
-  return () => window.removeEventListener('message', listener);
+  ch.addEventListener('message', listener);
+  return () => ch.removeEventListener('message', listener);
 }
