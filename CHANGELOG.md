@@ -2,6 +2,18 @@
 
 All notable changes to PixelArtify Studio are documented here.
 
+## [0.2.1] - 2026-11-13
+
+### Fixed
+
+- Self-contained Animate/Timeline graphs no longer ask for a Media input when
+  rendering animation. The Output inspector now shows **Render animation** and
+  renders the composited node tree directly; the video-input button is hidden
+  when no video source exists. The video button also delegates to the animation
+  renderer if a self-contained animation is present.
+- Animation export estimate and output frame count now follow the Animate or
+  Timeline fps.
+
 ## [0.2.0] - 2026-11-13
 
 ### Added

@@ -8,7 +8,7 @@
 
 **Live demo:** <https://gustafmos.github.io/pixelartify-studio/>
 
-**Changelog:** [CHANGELOG.md](CHANGELOG.md) · current version **0.2.0**
+**Changelog:** [CHANGELOG.md](CHANGELOG.md) · current version **0.2.1**
 
 PixelArtify Studio turns drawings, photos and videos into deliberate pixel art. It is built around the idea that pixel art is a *design resolution*, not a resized photo: a 480p and a 1080p source with the same preset produce the same art dimensions, the same feature scale and the same dither texture.
 

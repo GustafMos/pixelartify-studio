@@ -214,6 +214,13 @@ export function OutputPanel({ node }: { node: GraphNode }): React.ReactElement {
 
   const exportVideo = async (): Promise<void> => {
     if (!activeAsset || activeAsset.kind !== 'video' || !activeAsset.file) {
+      // Self-contained Animate/Timeline graphs have no media input. If one is
+      // present, the video button should still render it instead of asking for
+      // a video the graph does not have.
+      if (hasAnimation) {
+        await exportAnimation();
+        return;
+      }
       notify('Select a video asset in the Media input first.', 'warn');
       return;
     }
@@ -446,7 +453,7 @@ export function OutputPanel({ node }: { node: GraphNode }): React.ReactElement {
     }
   };
 
-  const exportAnimation = async (): Promise<void> => {
+  async function exportAnimation(): Promise<void> {
     if (!hasAnimation) {
       notify('Add an Animate or Timeline node to export an animation.', 'warn');
       return;
@@ -556,7 +563,7 @@ export function OutputPanel({ node }: { node: GraphNode }): React.ReactElement {
       setBusy(false);
       setProgress(null);
     }
-  };
+  }
 
   const exportPrint = async (): Promise<void> => {
     const isVideo = activeAsset?.kind === 'video' && !!activeAsset.file;
@@ -801,8 +808,12 @@ export function OutputPanel({ node }: { node: GraphNode }): React.ReactElement {
 
         {activeAsset?.kind !== 'video' ? (
           <div className="info-callout">
-            <Icon name="film" size={16} />
-            <span>Select a video in a Media input to enable video export. Image batches can still be packed as a spritesheet.</span>
+            <Icon name={hasAnimation ? 'clock' : 'film'} size={16} />
+            <span>
+              {hasAnimation
+                ? 'This graph is self-contained, so no Media input is required. Use Render animation to render the Animate/Timeline sequence.'
+                : 'Select a video in a Media input to enable video export. Image batches can still be packed as a spritesheet.'}
+            </span>
           </div>
         ) : null}
 
@@ -813,13 +824,16 @@ export function OutputPanel({ node }: { node: GraphNode }): React.ReactElement {
               className="primary-btn"
               onClick={() => void exportAnimation()}
               disabled={busy || isExporting}
+              title="Render the Animate/Timeline graph without requiring a Media input."
             >
-              <Icon name="clock" size={15} /> Render timeline animation
+              <Icon name="clock" size={15} /> Render animation
             </button>
           ) : null}
-          <button type="button" className="primary-btn" onClick={() => void exportVideo()} disabled={busy || isExporting}>
-            <Icon name="film" size={15} /> Render video / sheet
-          </button>
+          {activeAsset?.kind === 'video' || !hasAnimation ? (
+            <button type="button" className="primary-btn" onClick={() => void exportVideo()} disabled={busy || isExporting}>
+              <Icon name="film" size={15} /> {activeAsset?.kind === 'video' ? 'Render video / sheet' : 'Render video input / sheet'}
+            </button>
+          ) : null}
           <div className="two-col">
             <button type="button" className="ghost-btn small" onClick={() => void exportSpritesheetOnly()} disabled={busy || isExporting}>
               <Icon name="sheet" size={14} /> Image sheet
