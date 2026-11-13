@@ -202,6 +202,7 @@ export function Viewer({ resizeKey }: { resizeKey?: number | string } = {}): Rea
     const paletteKey = playbackPaletteKey(baseSettings, activeItem.assetId);
     let timer = 0;
     let lastTimeUpdate = 0;
+    let lastStopTime = -1;
     let stopped = false;
 
     const tick = () => {
@@ -211,6 +212,19 @@ export function Viewer({ resizeKey }: { resizeKey?: number | string } = {}): Rea
         timer = window.setTimeout(tick, 40);
         return;
       }
+      const retime = activeItem.retime;
+      const rawTime = video.currentTime;
+      const time =
+        retime?.mode === 'stop-motion'
+          ? Math.floor(rawTime * retime.targetFps) / retime.targetFps
+          : rawTime;
+      // Hold the canvas between stop-motion samples instead of redrawing the
+      // same quantised frame.
+      if (retime?.mode === 'stop-motion' && Math.abs(time - lastStopTime) < 1e-6) {
+        timer = window.setTimeout(tick, 40);
+        return;
+      }
+      lastStopTime = time;
       const started = performance.now();
       try {
         const maxSide = 640;
@@ -223,7 +237,6 @@ export function Viewer({ resizeKey }: { resizeKey?: number | string } = {}): Rea
         }
         ctx.drawImage(video, 0, 0, w, h);
         const data = ctx.getImageData(0, 0, w, h);
-        const time = video.currentTime;
         const frame: PixelImage = {
           width: w,
           height: h,

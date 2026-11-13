@@ -16,6 +16,8 @@ const FOOTER_H = 38;
 const PREVIEW_H = 72;
 const PORT_DOT_INSET = 9;
 const PORT_ROW_CENTER = 11;
+const GROUP_WIDTH = 220;
+const GROUP_HEIGHT = 112;
 
 export const TYPE_ICON: Record<GraphNodeType, IconName> = {
   input: 'image',
@@ -32,6 +34,9 @@ export const TYPE_ICON: Record<GraphNodeType, IconName> = {
   background: 'background',
   object3d: 'cube',
   animate: 'wave',
+  timeline: 'clock',
+  retime: 'gauge',
+  group: 'layers',
   postprocess: 'settings',
   merge: 'link',
   router: 'link',
@@ -115,6 +120,16 @@ function summaryFor(node: GraphNode, assetCount: number): string {
     case 'animate': {
       const wrap = String(p.wrap ?? 'horizontal');
       return `${Number(p.duration ?? 4).toFixed(1)}s · ${Number(p.fps ?? 24)} fps · ${wrap}`;
+    }
+    case 'timeline': {
+      return `${Number(p.duration ?? 4).toFixed(1)}s · ${Number(p.fps ?? 24)} fps`;
+    }
+    case 'retime': {
+      return `${String(p.mode ?? 'stop-motion')} · ${Number(p.targetFps ?? 12)} fps`;
+    }
+    case 'group': {
+      const ids = Array.isArray(p.nodeIds) ? p.nodeIds : [];
+      return `${ids.length} node${ids.length === 1 ? '' : 's'} · ${p.expanded ? 'expanded' : 'collapsed'}`;
     }
     case 'postprocess': {
       const post = p.postprocess as { ops?: unknown[] } | undefined;
@@ -215,6 +230,7 @@ export function GraphCanvas(): React.ReactElement {
     assetsByNode,
     activeAsset,
     selectedNodeId,
+    selectedNodeIds,
     previewNodeId,
     preview,
     selectNode,
@@ -225,6 +241,11 @@ export function GraphCanvas(): React.ReactElement {
     deleteEdge,
     insertNodeOnEdge,
     addNode,
+    createGroup,
+    duplicateGroup,
+    ungroup,
+    setGroupExpanded,
+    moveGroup,
     duplicateNode,
     deleteNode,
     updateNode,
@@ -258,16 +279,70 @@ export function GraphCanvas(): React.ReactElement {
     return map;
   }, [graph]);
 
-  const effectivePositions = useMemo(() => {    const map = new Map<string, { x: number; y: number }>();
+  const effectivePositions = useMemo(() => {
+    const map = new Map<string, { x: number; y: number }>();
+    const draggedGroup = drag
+      ? graph.nodes.find((node) => node.id === drag.id && node.type === 'group')
+      : null;
+    const draggedIds = new Set(
+      Array.isArray(draggedGroup?.params.nodeIds)
+        ? (draggedGroup!.params.nodeIds as string[])
+        : [],
+    );
     for (const node of graph.nodes) {
       if (drag && drag.id === node.id) {
         map.set(node.id, { x: drag.origX + drag.dx, y: drag.origY + drag.dy });
+      } else if (drag && draggedIds.has(node.id)) {
+        map.set(node.id, { x: node.x + drag.dx, y: node.y + drag.dy });
       } else {
         map.set(node.id, { x: node.x, y: node.y });
       }
     }
     return map;
   }, [graph.nodes, drag]);
+
+  const groupNodes = useMemo(
+    () => graph.nodes.filter((node) => node.type === 'group'),
+    [graph.nodes],
+  );
+  const collapsedGroups = useMemo(
+    () => groupNodes.filter((group) => group.params.expanded === false),
+    [groupNodes],
+  );
+  const collapsedGroupFor = useMemo(() => {
+    const map = new Map<string, GraphNode>();
+    for (const group of collapsedGroups) {
+      const ids = Array.isArray(group.params.nodeIds) ? (group.params.nodeIds as string[]) : [];
+      for (const id of ids) map.set(id, group);
+    }
+    return map;
+  }, [collapsedGroups]);
+  const hiddenNodeIds = useMemo(() => new Set(collapsedGroupFor.keys()), [collapsedGroupFor]);
+
+  const groupBounds = useCallback(
+    (group: GraphNode): { x: number; y: number; width: number; height: number } => {
+      const ids = Array.isArray(group.params.nodeIds) ? (group.params.nodeIds as string[]) : [];
+      const members = graph.nodes.filter(
+        (node) => ids.includes(node.id) && node.type !== 'group',
+      );
+      if (members.length === 0) {
+        return { x: group.x, y: group.y, width: GROUP_WIDTH, height: GROUP_HEIGHT };
+      }
+      const positions = members.map((node) => effectivePositions.get(node.id) ?? { x: node.x, y: node.y });
+      const heights = members.map((node) => nodeHeight(node, node.id === previewNodeId));
+      const minX = Math.min(...positions.map((pos) => pos.x));
+      const minY = Math.min(...positions.map((pos) => pos.y));
+      const maxX = Math.max(...positions.map((pos) => pos.x + NODE_WIDTH));
+      const maxY = Math.max(...positions.map((pos, i) => pos.y + heights[i]));
+      return {
+        x: minX - 18,
+        y: minY - 34,
+        width: maxX - minX + 36,
+        height: maxY - minY + 52,
+      };
+    },
+    [effectivePositions, graph.nodes, previewNodeId],
+  );
 
   const findInsertEdge = useCallback(
     (nodeId: string, pos: { x: number; y: number }, detach = false): string | null => {
@@ -432,7 +507,10 @@ export function GraphCanvas(): React.ReactElement {
         if (prev && prev.moved) {
           const pos = { x: prev.origX + prev.dx, y: prev.origY + prev.dy };
           const targetEdge = findInsertEdge(prev.id, pos, prev.detach);
-          if (prev.detach) {
+          const moving = graph.nodes.find((node) => node.id === prev.id);
+          if (moving?.type === 'group') {
+            moveGroup(prev.id, pos.x, pos.y);
+          } else if (prev.detach) {
             moveNodeDetached(prev.id, pos.x, pos.y, targetEdge);
           } else {
             if (targetEdge) insertNodeOnEdge(prev.id, targetEdge);
@@ -450,7 +528,17 @@ export function GraphCanvas(): React.ReactElement {
       window.removeEventListener('pointermove', onMove);
       window.removeEventListener('pointerup', onUp);
     };
-  }, [drag, findInsertEdge, insertNodeOnEdge, moveNode, moveNodeDetached, detachNodeWithBridge, view.zoom]);
+  }, [
+    drag,
+    findInsertEdge,
+    graph.nodes,
+    insertNodeOnEdge,
+    moveGroup,
+    moveNode,
+    moveNodeDetached,
+    detachNodeWithBridge,
+    view.zoom,
+  ]);
 
   useEffect(() => {
     if (!pan) return;
@@ -581,6 +669,7 @@ export function GraphCanvas(): React.ReactElement {
   const filteredTypes = useMemo(() => {
     const q = addSearch.trim().toLowerCase();
     return (Object.keys(NODE_DEFS) as GraphNodeType[]).filter((t) => {
+      if (t === 'group') return false;
       const d = NODE_DEFS[t];
       return !q || d.title.toLowerCase().includes(q) || d.description.toLowerCase().includes(q) || t.includes(q);
     });
@@ -620,6 +709,12 @@ export function GraphCanvas(): React.ReactElement {
           >
             <Icon name="plus" size={15} /> Add node
           </button>
+          {selectedNodeIds.filter((id) => graph.nodes.find((n) => n.id === id)?.type !== 'group')
+            .length >= 2 ? (
+            <button type="button" className="ghost-btn" onClick={() => createGroup()}>
+              <Icon name="layers" size={15} /> Group {selectedNodeIds.length}
+            </button>
+          ) : null}
           <IconButton icon="fit" label="Fit graph" onClick={fitView} />
           <div className="zoom-readout">{Math.round(view.zoom * 100)}%</div>
         </div>
@@ -705,6 +800,15 @@ export function GraphCanvas(): React.ReactElement {
               if (drag?.detach && drag.moved && (edge.fromNode === drag.id || edge.toNode === drag.id)) {
                 return null;
               }
+              const fromGroup = collapsedGroupFor.get(from.id);
+              const toGroup = collapsedGroupFor.get(to.id);
+              if (fromGroup && toGroup && fromGroup.id === toGroup.id) return null;
+              const fromGroupPos = fromGroup
+                ? effectivePositions.get(fromGroup.id) ?? { x: fromGroup.x, y: fromGroup.y }
+                : null;
+              const toGroupPos = toGroup
+                ? effectivePositions.get(toGroup.id) ?? { x: toGroup.x, y: toGroup.y }
+                : null;
               const fp = effectivePositions.get(from.id)!;
               const tp = effectivePositions.get(to.id)!;
               const fromDef = NODE_DEFS[from.type];
@@ -713,10 +817,20 @@ export function GraphCanvas(): React.ReactElement {
               const inIdx = NODE_DEFS[to.type].inputs.findIndex((p) => p.id === edge.toPort);
               if (inIdx < 0) return null;
               const outPort = fromDef.outputs[outIdx];
-              const x1 = fp.x + NODE_WIDTH - PORT_DOT_INSET;
-              const y1 = fp.y + HEADER_H + PORT_START + outIdx * PORT_STEP + PORT_ROW_CENTER;
-              const x2 = tp.x + PORT_DOT_INSET;
-              const y2 = tp.y + HEADER_H + PORT_START + inIdx * PORT_STEP + PORT_ROW_CENTER;
+              const inPort = NODE_DEFS[to.type].inputs[inIdx];
+              const socketOrder = ['media', 'mask', 'palette', 'motion'];
+              const outTypeIndex = Math.max(0, socketOrder.indexOf(outPort.type));
+              const inTypeIndex = Math.max(0, socketOrder.indexOf(inPort.type));
+              const x1 = fromGroupPos
+                ? fromGroupPos.x + GROUP_WIDTH - PORT_DOT_INSET
+                : fp.x + NODE_WIDTH - PORT_DOT_INSET;
+              const y1 = fromGroupPos
+                ? fromGroupPos.y + 46 + outTypeIndex * 12
+                : fp.y + HEADER_H + PORT_START + outIdx * PORT_STEP + PORT_ROW_CENTER;
+              const x2 = toGroupPos ? toGroupPos.x + PORT_DOT_INSET : tp.x + PORT_DOT_INSET;
+              const y2 = toGroupPos
+                ? toGroupPos.y + 46 + inTypeIndex * 12
+                : tp.y + HEADER_H + PORT_START + inIdx * PORT_STEP + PORT_ROW_CENTER;
               const dx = Math.max(50, Math.abs(x2 - x1) * 0.45);
               const d = `M ${x1} ${y1} C ${x1 + dx} ${y1}, ${x2 - dx} ${y2}, ${x2} ${y2}`;
               const color = edgeColor(outPort.type);
@@ -787,12 +901,147 @@ export function GraphCanvas(): React.ReactElement {
               : null}
           </svg>
 
+          {groupNodes.map((group) => {
+            const expanded = group.params.expanded !== false;
+            const selected = selectedNodeId === group.id;
+            if (expanded) {
+              const bounds = groupBounds(group);
+              return (
+                <div
+                  key={group.id}
+                  className={`node-group-frame ${selected ? 'is-selected' : ''}`}
+                  style={{
+                    left: bounds.x,
+                    top: bounds.y,
+                    width: bounds.width,
+                    height: bounds.height,
+                  }}
+                >
+                  <div
+                    className="node-group-head"
+                    onPointerDown={(e) => {
+                      e.stopPropagation();
+                      if ((e.target as HTMLElement).closest('button')) return;
+                      selectNode(group.id, e.ctrlKey || e.metaKey);
+                      setDrag({
+                        id: group.id,
+                        startClientX: e.clientX,
+                        startClientY: e.clientY,
+                        origX: group.x,
+                        origY: group.y,
+                        dx: 0,
+                        dy: 0,
+                        moved: false,
+                      });
+                    }}
+                  >
+                    <Icon name="layers" size={13} />
+                    <strong>{group.title}</strong>
+                    <span>{Array.isArray(group.params.nodeIds) ? (group.params.nodeIds as string[]).length : 0} nodes</span>
+                    <div className="node-group-actions">
+                      <button type="button" title="Collapse group" onClick={() => setGroupExpanded(group.id, false)}>
+                        <Icon name="minus" size={12} />
+                      </button>
+                      <button type="button" title="Duplicate group" onClick={() => duplicateGroup(group.id)}>
+                        <Icon name="copy" size={12} />
+                      </button>
+                      <button type="button" title="Ungroup" onClick={() => ungroup(group.id)}>
+                        <Icon name="close" size={12} />
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              );
+            }
+            const ids = Array.isArray(group.params.nodeIds) ? (group.params.nodeIds as string[]) : [];
+            const incoming = graph.edges.filter(
+              (edge) => ids.includes(edge.toNode) && !ids.includes(edge.fromNode),
+            );
+            const outgoing = graph.edges.filter(
+              (edge) => ids.includes(edge.fromNode) && !ids.includes(edge.toNode),
+            );
+            return (
+              <div
+                key={group.id}
+                className={`node-group-box ${selected ? 'is-selected' : ''}`}
+                style={{
+                  left: effectivePositions.get(group.id)?.x ?? group.x,
+                  top: effectivePositions.get(group.id)?.y ?? group.y,
+                  width: GROUP_WIDTH,
+                  height: GROUP_HEIGHT,
+                  ['--node-accent' as string]: NODE_DEFS.group.accent,
+                }}
+                onPointerDown={(e) => {
+                  e.stopPropagation();
+                  if ((e.target as HTMLElement).closest('button')) return;
+                  selectNode(group.id, e.ctrlKey || e.metaKey);
+                  setDrag({
+                    id: group.id,
+                    startClientX: e.clientX,
+                    startClientY: e.clientY,
+                    origX: group.x,
+                    origY: group.y,
+                    dx: 0,
+                    dy: 0,
+                    moved: false,
+                  });
+                }}
+              >
+                <div className="node-group-head">
+                  <Icon name="layers" size={13} />
+                  <strong>{group.title}</strong>
+                  <span>{ids.length} nodes</span>
+                  <div className="node-group-actions">
+                    <button type="button" title="Expand group" onClick={() => setGroupExpanded(group.id, true)}>
+                      <Icon name="plus" size={12} />
+                    </button>
+                    <button type="button" title="Duplicate group" onClick={() => duplicateGroup(group.id)}>
+                      <Icon name="copy" size={12} />
+                    </button>
+                    <button type="button" title="Ungroup" onClick={() => ungroup(group.id)}>
+                      <Icon name="close" size={12} />
+                    </button>
+                  </div>
+                </div>
+                <div className="node-group-body">
+                  <span>{incoming.length} in · {outgoing.length} out</span>
+                  <small>Collapsed group</small>
+                </div>
+                {['media', 'mask', 'palette', 'motion'].map((type, index) => {
+                  const hasIn = incoming.some((edge) => {
+                    const source = graph.nodes.find((n) => n.id === edge.fromNode);
+                    return source
+                      ? NODE_DEFS[source.type].outputs.find((p) => p.id === edge.fromPort)?.type === type
+                      : false;
+                  });
+                  const hasOut = outgoing.some((edge) => {
+                    const target = graph.nodes.find((n) => n.id === edge.toNode);
+                    return target
+                      ? NODE_DEFS[target.type].inputs.find((p) => p.id === edge.toPort)?.type === type
+                      : false;
+                  });
+                  return (
+                    <span key={type}>
+                      {hasIn ? (
+                        <i className={`node-group-port node-group-port-in port-${type}`} style={{ top: 46 + index * 12 }} />
+                      ) : null}
+                      {hasOut ? (
+                        <i className={`node-group-port node-group-port-out port-${type}`} style={{ top: 46 + index * 12 }} />
+                      ) : null}
+                    </span>
+                  );
+                })}
+              </div>
+            );
+          })}
+
           {graph.nodes.map((node) => {
+            if (node.type === 'group' || hiddenNodeIds.has(node.id)) return null;
             const def = NODE_DEFS[node.type];
             const pos = effectivePositions.get(node.id)!;
             const showPreview = node.id === previewNodeId;
             const height = nodeHeight(node, showPreview);
-            const selected = node.id === selectedNodeId;
+            const selected = node.id === selectedNodeId || selectedNodeIds.includes(node.id);
             const portCount = Math.max(def.inputs.length, def.outputs.length);
             const assets = assetsByNode[node.id] ?? [];
             const previewSrc = node.type === 'input' ? activeAsset?.thumb : showPreview ? selectedPreview : null;
@@ -809,7 +1058,7 @@ export function GraphCanvas(): React.ReactElement {
                 }}
                 onPointerDown={(e) => {
                   e.stopPropagation();
-                  selectNode(node.id);
+                  selectNode(node.id, e.ctrlKey || e.metaKey);
                 }}
               >
                 <div
@@ -817,7 +1066,7 @@ export function GraphCanvas(): React.ReactElement {
                   onPointerDown={(e) => {
                     e.stopPropagation();
                     if ((e.target as HTMLElement).closest('button')) return;
-                    selectNode(node.id);
+                    selectNode(node.id, e.ctrlKey || e.metaKey);
                     detachedRef.current = null;
                     setDrag({
                       id: node.id,

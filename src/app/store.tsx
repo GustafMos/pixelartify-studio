@@ -98,6 +98,7 @@ interface StudioContextValue {
   activeAssetId: string | null;
   activeItem: GraphMediaItem | null;
   selectedNodeId: string | null;
+  selectedNodeIds: string[];
   selectedNode: GraphNode | null;
   selectedOutputId: string | null;
   previewNodeId: string | null;
@@ -129,7 +130,7 @@ interface StudioContextValue {
   animationLoop: boolean;
   setAnimationTime: (time: number) => void;
   setAnimationPlaying: (playing: boolean) => void;
-  renderAnimationFrame: (time: number) => RenderResult | null;
+  renderAnimationFrame: (time: number, fullQuality?: boolean) => RenderResult | null;
   subjectSelect: { nodeId: string; maskId: string; mode: 'magic' | 'box' } | null;
   maskTracking: { key: string; done: number; total: number } | null;
   trackedMasks: Record<string, TrackedMaskSequence>;
@@ -143,7 +144,7 @@ interface StudioContextValue {
   paletteStudioOpen: boolean;
   toasts: Toast[];
   setMode: (mode: 'studio' | 'split' | 'graph') => void;
-  selectNode: (id: string | null) => void;
+  selectNode: (id: string | null, additive?: boolean) => void;
   setSelectedOutput: (id: string) => void;
   setActiveAsset: (id: string) => void;
   setActivePalette: (id: string | null) => void;
@@ -154,6 +155,11 @@ interface StudioContextValue {
   endSubjectSelect: () => void;
   setPreviewFullQuality: (full: boolean) => void;
   addNode: (type: GraphNodeType, x?: number, y?: number) => string;
+  createGroup: () => string | null;
+  duplicateGroup: (id: string) => string | null;
+  ungroup: (id: string) => void;
+  setGroupExpanded: (id: string, expanded: boolean) => void;
+  moveGroup: (id: string, x: number, y: number) => void;
   duplicateNode: (id: string) => string | null;
   deleteNode: (id: string) => void;
   updateNode: (id: string, patch: Partial<GraphNode>) => void;
@@ -214,6 +220,7 @@ export function StudioProvider({ children }: { children: React.ReactNode }): Rea
   const [assetsByNode, setAssetsByNode] = useState<Record<string, AssetRecord[]>>({});
   const [activeAssetId, setActiveAssetIdState] = useState<string | null>(null);
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
+  const [selectedNodeIds, setSelectedNodeIds] = useState<string[]>([]);
   const [selectedOutputId, setSelectedOutputId] = useState<string | null>(null);
   const [mode, setModeState] = useState<'studio' | 'split' | 'graph'>(() => loadUiMode());
   const [preview, setPreview] = useState<RenderResult | null>(null);
@@ -324,17 +331,32 @@ export function StudioProvider({ children }: { children: React.ReactNode }): Rea
     () => graph.nodes.find((n) => n.id === selectedNodeId) ?? null,
     [graph.nodes, selectedNodeId],
   );
+
+  useEffect(() => {
+    setSelectedNodeIds((prev) => {
+      if (!selectedNodeId) return [];
+      if (prev.includes(selectedNodeId)) return prev;
+      return [selectedNodeId];
+    });
+  }, [selectedNodeId]);
   const animationNode = useMemo(
     () => graph.nodes.find((n) => n.type === 'animate') ?? null,
     [graph.nodes],
   );
-  const hasAnimation = Boolean(animationNode);
+  const timelineNode = useMemo(
+    () => graph.nodes.find((n) => n.type === 'timeline') ?? null,
+    [graph.nodes],
+  );
+  const hasAnimation = Boolean(animationNode || timelineNode);
   const animationDuration = Math.max(
     0.1,
-    Number(animationNode?.params.duration ?? 4) || 4,
+    Number(timelineNode?.params.duration ?? animationNode?.params.duration ?? 4) || 4,
   );
-  const animationFps = Math.max(1, Math.round(Number(animationNode?.params.fps ?? 24) || 24));
-  const animationLoop = Boolean(animationNode?.params.loop);
+  const animationFps = Math.max(
+    1,
+    Math.round(Number(timelineNode?.params.fps ?? animationNode?.params.fps ?? 24) || 24),
+  );
+  const animationLoop = Boolean(timelineNode?.params.loop ?? animationNode?.params.loop);
 
   useEffect(() => {
     if (outputs.length === 0) {
@@ -449,23 +471,23 @@ export function StudioProvider({ children }: { children: React.ReactNode }): Rea
    * viewer's animation loop paints the result directly to the preview canvas.
    */
   const renderAnimationFrame = useCallback(
-    (time: number): RenderResult | null => {
+    (time: number, fullQuality = false): RenderResult | null => {
       if (!previewNode) return null;
       const ev = evaluateGraph(graph, {
         assetsByNode: assetsByNode as unknown as Record<string, GraphAsset[]>,
         maskCache: maskCacheRef.current,
         maskOverrides,
         time,
-        maxGeneratedSide: 256,
+        maxGeneratedSide: fullQuality ? undefined : 256,
       });
       const items = mediaAtPort(ev, previewNode.id);
       if (items.length === 0) return null;
       const item = items.find((i) => i.assetId === activeAsset?.id) ?? items[0];
       const base = settingsFromItem(item);
-      const settings = animationSettings(base, item);
+      const settings = fullQuality ? base : animationSettings(base, item);
       const paletteKey = playbackPaletteKey(
         base,
-        `${activeAsset?.id ?? 'animation'}:${previewNode.id}`,
+        `${activeAsset?.id ?? 'animation'}:${previewNode.id}:${fullQuality ? 'full' : 'fast'}`,
       );
       const paletteOverride =
         animationPaletteRef.current?.key === paletteKey
@@ -475,9 +497,9 @@ export function StudioProvider({ children }: { children: React.ReactNode }): Rea
         { image: item.source, masks: item.masks, settings },
         {
           stopAfter: stopStageForNode(previewNode.type),
-          upscale: false,
+          upscale: fullQuality,
           seed: 0,
-          maxWorkingSide: 192,
+          maxWorkingSide: fullQuality ? 2048 : 192,
           paletteOverride,
           time,
         },
@@ -554,7 +576,23 @@ export function StudioProvider({ children }: { children: React.ReactNode }): Rea
     if (next === 'studio' && selectedOutputId) setSelectedNodeId(selectedOutputId);
   }, [selectedOutputId]);
 
-  const selectNode = useCallback((id: string | null) => setSelectedNodeId(id), []);
+  const selectNode = useCallback((id: string | null, additive = false) => {
+    if (!id) {
+      setSelectedNodeId(null);
+      setSelectedNodeIds([]);
+      return;
+    }
+    if (!additive) {
+      setSelectedNodeId(id);
+      setSelectedNodeIds([id]);
+      return;
+    }
+    setSelectedNodeIds((prev) => {
+      const next = prev.includes(id) ? prev.filter((value) => value !== id) : [...prev, id];
+      setSelectedNodeId(next.length > 0 ? (next.includes(id) ? id : next[next.length - 1]) : null);
+      return next;
+    });
+  }, []);
   const setSelectedOutput = useCallback((id: string) => {
     setSelectedOutputId(id);
     const node = graph.nodes.find((n) => n.id === id);
@@ -771,6 +809,131 @@ export function StudioProvider({ children }: { children: React.ReactNode }): Rea
     setSelectedNodeId(copy.id);
     return copy.id;
   }, [graph.nodes, mutateGraph]);
+
+  const createGroup = useCallback((): string | null => {
+    const ids = selectedNodeIds.filter((id) => {
+      const node = graph.nodes.find((n) => n.id === id);
+      return node && node.type !== 'group';
+    });
+    if (ids.length < 2) {
+      notify('Select two or more nodes with Ctrl/Cmd-click before grouping.', 'warn');
+      return null;
+    }
+    const members = graph.nodes.filter((node) => ids.includes(node.id));
+    const minX = Math.min(...members.map((node) => node.x)) - 20;
+    const minY = Math.min(...members.map((node) => node.y)) - 20;
+    const settings = settingsFromGraph(graph);
+    const count = graph.nodes.filter((n) => n.type === 'group').length + 1;
+    const group = createNode('group', minX, minY, { nodeIds: ids, expanded: false }, settings);
+    group.title = `Group ${count}`;
+    mutateGraph((g) => ({ ...g, nodes: [...g.nodes, group] }));
+    setSelectedNodeId(group.id);
+    setSelectedNodeIds([group.id]);
+    notify(`Grouped ${ids.length} nodes. Click the group to expand or duplicate it.`, 'success');
+    return group.id;
+  }, [graph, mutateGraph, notify, selectedNodeIds]);
+
+  const duplicateGroup = useCallback((id: string): string | null => {
+    const group = graph.nodes.find((n) => n.id === id && n.type === 'group');
+    if (!group) return null;
+    const ids = Array.isArray(group.params.nodeIds) ? (group.params.nodeIds as string[]) : [];
+    const members = graph.nodes.filter((n) => ids.includes(n.id) && n.type !== 'group');
+    if (members.length === 0) return null;
+    const idMap = new Map<string, string>();
+    const clones = members.map((member) => {
+      const clone = { ...deepClone(member), id: uid(member.type), x: member.x + 44, y: member.y + 44 };
+      idMap.set(member.id, clone.id);
+      return clone;
+    });
+    const clonedEdges = graph.edges
+      .filter((edge) => idMap.has(edge.fromNode) && idMap.has(edge.toNode))
+      .map((edge) => ({
+        ...deepClone(edge),
+        id: uid('edge'),
+        fromNode: idMap.get(edge.fromNode)!,
+        toNode: idMap.get(edge.toNode)!,
+      }));
+    const clonedAssets: Record<string, AssetRecord[]> = {};
+    for (const member of members) {
+      if (member.type !== 'input') continue;
+      const targetId = idMap.get(member.id);
+      const assets = assetsByNode[member.id] ?? [];
+      if (!targetId || assets.length === 0) continue;
+      clonedAssets[targetId] = assets.map((asset) => ({ ...asset, id: uid('asset') }));
+    }
+    const copy = {
+      ...deepClone(group),
+      id: uid('group'),
+      title: `${group.title} copy`,
+      x: group.x + 44,
+      y: group.y + 44,
+      params: {
+        ...deepClone(group.params),
+        nodeIds: clones.map((node) => node.id),
+        expanded: false,
+      },
+    };
+    mutateGraph((g) => ({
+      ...g,
+      nodes: [...g.nodes, ...clones, copy],
+      edges: [...g.edges, ...clonedEdges],
+    }));
+    if (Object.keys(clonedAssets).length > 0) {
+      setAssetsByNode((prev) => ({ ...prev, ...clonedAssets }));
+    }
+    setSelectedNodeId(copy.id);
+    setSelectedNodeIds([copy.id]);
+    notify(`Duplicated “${group.title}” with ${clones.length} nodes.`, 'success');
+    return copy.id;
+  }, [assetsByNode, graph, mutateGraph, notify]);
+
+  const ungroup = useCallback((id: string) => {
+    mutateGraph((g) => ({ ...g, nodes: g.nodes.filter((node) => node.id !== id) }));
+    setSelectedNodeId(null);
+    setSelectedNodeIds([]);
+  }, [mutateGraph]);
+
+  const setGroupExpanded = useCallback((id: string, expanded: boolean) => {
+    mutateGraph((g) => {
+      const group = g.nodes.find((node) => node.id === id && node.type === 'group');
+      if (!group) return g;
+      const ids = Array.isArray(group.params.nodeIds) ? (group.params.nodeIds as string[]) : [];
+      const members = g.nodes.filter((node) => ids.includes(node.id) && node.type !== 'group');
+      const minX = members.length > 0 ? Math.min(...members.map((node) => node.x)) : group.x;
+      const minY = members.length > 0 ? Math.min(...members.map((node) => node.y)) : group.y;
+      return {
+        ...g,
+        nodes: g.nodes.map((node) =>
+          node.id === id
+            ? {
+                ...node,
+                x: expanded ? node.x : minX,
+                y: expanded ? node.y : minY,
+                params: { ...node.params, expanded },
+              }
+            : node,
+        ),
+      };
+    });
+  }, [mutateGraph]);
+
+  const moveGroup = useCallback((id: string, x: number, y: number) => {
+    mutateGraph((g) => {
+      const group = g.nodes.find((node) => node.id === id && node.type === 'group');
+      if (!group) return g;
+      const ids = Array.isArray(group.params.nodeIds) ? (group.params.nodeIds as string[]) : [];
+      const dx = x - group.x;
+      const dy = y - group.y;
+      return {
+        ...g,
+        nodes: g.nodes.map((node) => {
+          if (node.id === id) return { ...node, x, y };
+          if (ids.includes(node.id)) return { ...node, x: node.x + dx, y: node.y + dy };
+          return node;
+        }),
+      };
+    });
+  }, [mutateGraph]);
 
   const deleteNode = useCallback((id: string) => {
     const result = deleteNodePreservingGraph(graph, id);
@@ -1489,6 +1652,7 @@ export function StudioProvider({ children }: { children: React.ReactNode }): Rea
     activeAssetId: activeAsset?.id ?? null,
     activeItem,
     selectedNodeId,
+    selectedNodeIds,
     selectedNode,
     selectedOutputId,
     previewNodeId,
@@ -1540,6 +1704,11 @@ export function StudioProvider({ children }: { children: React.ReactNode }): Rea
     endSubjectSelect,
     setPreviewFullQuality,
     addNode,
+    createGroup,
+    duplicateGroup,
+    ungroup,
+    setGroupExpanded,
+    moveGroup,
     duplicateNode,
     deleteNode,
     updateNode,

@@ -1,6 +1,6 @@
 {
   "name": "pixelartify-studio",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": false,
   "description": "PixelArtify Studio â€” edge-aware, resolution-independent pixel art conversion with palettes, dithering, layers and video.",
   "bin": {

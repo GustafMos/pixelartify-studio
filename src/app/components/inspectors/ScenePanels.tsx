@@ -358,6 +358,154 @@ export function AnimatePanel({ node }: { node: GraphNode }): React.ReactElement 
   );
 }
 
+export function TimelinePanel({ node }: { node: GraphNode }): React.ReactElement {
+  const { updateNodeParams } = useStudio();
+  const p = node.params as { duration?: number; fps?: number; loop?: boolean };
+  const duration = Math.max(0.1, Number(p.duration ?? 4));
+  const fps = Math.max(1, Math.round(Number(p.fps ?? 24)));
+  const frames = Math.max(1, Math.round(duration * fps));
+  const set = (patch: Record<string, unknown>): void => updateNodeParams(node.id, patch);
+
+  return (
+    <div className="inspector-panel">
+      <Section
+        title="Timeline"
+        subtitle="Stretch still media across time so effects, grain and overlays can animate over it."
+      >
+        <div className="two-col">
+          <NumberField
+            label="Duration"
+            value={duration}
+            min={0.1}
+            step={0.1}
+            unit="s"
+            onChange={(value) => set({ duration: value })}
+          />
+          <NumberField
+            label="Frame rate"
+            value={fps}
+            min={1}
+            max={60}
+            step={1}
+            unit="fps"
+            onChange={(value) => set({ fps: Math.round(value) })}
+          />
+        </div>
+        <Toggle
+          label={`Loop (${frames} frames)`}
+          checked={p.loop !== false}
+          hint="Loop the viewer timeline after Duration."
+          onChange={(loop) => set({ loop })}
+        />
+        <p className="micro-copy">
+          The image itself stays still; connect an Animate node to overlays or enable Animate on
+          grain / noise displacement to create motion. Use Render animation in the Output inspector
+          to export the sequence.
+        </p>
+      </Section>
+      <div className="info-callout">
+        <Icon name="clock" size={16} />
+        <span>
+          Chain this after a Media input and before Pixelate. Video inputs keep their own duration
+          and are passed through unchanged.
+        </span>
+      </div>
+    </div>
+  );
+}
+
+export function RetimePanel({ node }: { node: GraphNode }): React.ReactElement {
+  const { updateNodeParams } = useStudio();
+  const p = node.params as {
+    mode?: string;
+    sourceFps?: number;
+    targetFps?: number;
+    quality?: string;
+  };
+  const mode = p.mode === 'optical-flow' ? 'optical-flow' : 'stop-motion';
+  const sourceFps = Math.max(1, Math.round(Number(p.sourceFps ?? 12)));
+  const targetFps = Math.max(1, Math.round(Number(p.targetFps ?? 12)));
+  const set = (patch: Record<string, unknown>): void => updateNodeParams(node.id, patch);
+
+  return (
+    <div className="inspector-panel">
+      <Section
+        title="Video retime"
+        subtitle="Applied during video / spritesheet export and stop-motion preview."
+      >
+        <SelectField
+          label="Mode"
+          value={mode}
+          options={[
+            { value: 'stop-motion', label: 'Stop motion (lower fps)' },
+            { value: 'optical-flow', label: 'Optical flow (interpolate)' },
+          ]}
+          onChange={(value) => set({ mode: value })}
+        />
+        {mode === 'stop-motion' ? (
+          <NumberField
+            label="Output frame rate"
+            value={targetFps}
+            min={1}
+            max={60}
+            step={1}
+            unit="fps"
+            hint="Samples the source at this rate and exports a choppy sequence. Try 12 fps."
+            onChange={(value) => set({ targetFps: Math.round(value) })}
+          />
+        ) : (
+          <>
+            <div className="two-col">
+              <NumberField
+                label="Source rate"
+                value={sourceFps}
+                min={1}
+                max={60}
+                step={1}
+                unit="fps"
+                hint="Decode the source at this rate before interpolating."
+                onChange={(value) => set({ sourceFps: Math.round(value) })}
+              />
+              <NumberField
+                label="Target rate"
+                value={targetFps}
+                min={1}
+                max={60}
+                step={1}
+                unit="fps"
+                hint="Export the interpolated result at this rate."
+                onChange={(value) => set({ targetFps: Math.round(value) })}
+              />
+            </div>
+            <SelectField
+              label="Flow quality"
+              value={p.quality === 'fast' || p.quality === 'best' ? p.quality : 'balanced'}
+              options={[
+                { value: 'fast', label: 'Fast' },
+                { value: 'balanced', label: 'Balanced' },
+                { value: 'best', label: 'Best' },
+              ]}
+              onChange={(quality) => set({ quality })}
+            />
+            <p className="micro-copy">
+              Motion is estimated with block matching and the two source frames are warped and
+              blended. This is a fast approximation, not a production optical-flow solver. Live
+              preview plays at the source timing; the interpolated result is written during export.
+            </p>
+          </>
+        )}
+      </Section>
+      <div className="info-callout">
+        <Icon name="gauge" size={16} />
+        <span>
+          Place Retime after a Media input and before Pixelate. Stop motion preview quantises the
+          video clock to the output rate. Optical-flow output uses the normal video export button.
+        </span>
+      </div>
+    </div>
+  );
+}
+
 export function Object3DPanel({ node }: { node: GraphNode }): React.ReactElement {
   const { updateNodeParams } = useStudio();
   const connected = useHasMediaInput(node);

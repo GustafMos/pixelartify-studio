@@ -5,7 +5,9 @@ import { useStudio } from '../store';
 import { TYPE_ICON } from './GraphCanvas';
 import { Icon } from './icons';
 
-const ALL_TYPES = Object.keys(NODE_DEFS) as GraphNodeType[];
+const ALL_TYPES: GraphNodeType[] = (Object.keys(NODE_DEFS) as GraphNodeType[]).filter(
+  (type) => type !== 'group',
+);
 
 function matches(type: GraphNodeType, query: string): boolean {
   const q = query.trim().toLowerCase();

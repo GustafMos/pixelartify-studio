@@ -17,6 +17,7 @@ export * from './magic';
 export * from './background';
 export * from './render3d';
 export * from './motion';
+export * from './retime';
 export * from './pipeline';
 export * from './defaults';
 export * from './graph';

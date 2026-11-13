@@ -8,6 +8,7 @@ import {
   SHEET_MAX_SIDE,
   computeArtSize,
   defaultSettings,
+  interpolateFrame,
   layoutPrintPages,
   packSpritesheets,
   printMetadata,
@@ -15,6 +16,7 @@ import {
   renderPrintPage,
   settingsFromItem,
   spritesheetMetadata,
+  type RetimeQuality,
 } from '../../../core';
 import type { PixelImage } from '../../../core/types';
 import { applyTrackedAlphaCuts, mediaAtPort } from '../../../core/graph';
@@ -55,6 +57,10 @@ export function OutputPanel({ node }: { node: GraphNode }): React.ReactElement {
     notify,
     presets,
     trackedMasks,
+    hasAnimation,
+    animationDuration,
+    animationFps,
+    renderAnimationFrame,
   } = useStudio();
   const output: OutputSettings = {
     ...DEFAULT_OUTPUT,
@@ -98,7 +104,10 @@ export function OutputPanel({ node }: { node: GraphNode }): React.ReactElement {
   const duration = activeAsset?.kind === 'video' ? activeAsset.duration ?? 0 : 0;
   const start = Math.max(0, Math.min(video.start, duration));
   const end = Math.min(duration, video.end ?? duration);
-  const frameEstimate = Math.max(0, Math.ceil(((end - start) || duration) * video.fps));
+  const retimeItem = activeItem ?? outputItems[0] ?? null;
+  const retimeSettings = retimeItem?.retime;
+  const outputFps = retimeSettings ? retimeSettings.targetFps : video.fps;
+  const frameEstimate = Math.max(0, Math.ceil(((end - start) || duration) * outputFps));
 
   const stop = async (): Promise<void> => {
     abortRef.current?.abort();
@@ -214,6 +223,12 @@ export function OutputPanel({ node }: { node: GraphNode }): React.ReactElement {
       return;
     }
     const settings = { ...settingsFromItem(item), output, video };
+    const retime = item.retime;
+    const outFps =
+      retime?.mode === 'stop-motion' || retime?.mode === 'optical-flow'
+        ? retime.targetFps
+        : settings.video.fps;
+    const extractFps = retime?.mode === 'optical-flow' ? retime.sourceFps : outFps;
     const wantsVideo = settings.video.output === 'video' || settings.video.output === 'both';
     let wantsSheet = settings.video.output === 'spritesheet' || settings.video.output === 'both';
 
@@ -222,7 +237,11 @@ export function OutputPanel({ node }: { node: GraphNode }): React.ReactElement {
     // skip just the sheet) instead of after minutes of work.
     if (wantsVideo || wantsSheet) {
       const est = computeArtSize(activeAsset.width, activeAsset.height, item.resolution);
-      const count = Math.max(1, frameEstimate || outputItems.length || 1);
+      const span = (end - start) || duration;
+      const count = Math.max(
+        1,
+        Math.round(span * outFps) || frameEstimate || outputItems.length || 1,
+      );
       const cellW = Math.max(1, est.exportWidth);
       const cellH = Math.max(1, est.exportHeight);
       const MAX_VIDEO_SIDE = 8192;
@@ -264,41 +283,85 @@ export function OutputPanel({ node }: { node: GraphNode }): React.ReactElement {
       const frames: ReturnType<typeof renderPixelArt>['art'][] = [];
       const writerState: { writer: VideoWriter | null } = { writer: null };
       let resultInfo: Awaited<ReturnType<VideoWriter['finish']>> | null = null;
-      let index = 0;
       const startTime = start;
       const endTime = video.end !== null ? Math.min(duration, Math.max(startTime + 0.05, video.end)) : duration;
 
-      await extractVideoFrames(
-        activeAsset.file,
-        {
-          start: startTime,
-          end: endTime,
-          fps: settings.video.fps,
-          signal: controller.signal,
-          onProgress: (done, total) => {
-            setProgress(`Decoding frame ${done} / ${total}`);
+      const addFrame = async (image: PixelImage, timestamp: number): Promise<void> => {
+        const { result } = renderItem(item, image, timestamp);
+        if (wantsVideo && !writerState.writer) {
+          const newWriter = new VideoWriter({
+            width: result.art.width,
+            height: result.art.height,
+            fps: outFps,
+            codec: settings.video.codec,
+            bitrateMbps: settings.video.bitrateMbps,
+          });
+          writerState.writer = newWriter;
+          writerRef.current = newWriter;
+          await newWriter.start();
+        }
+        if (wantsVideo && writerState.writer) await writerState.writer.add(result.art, timestamp);
+        if (wantsSheet) frames.push(result.art);
+      };
+
+      if (retime?.mode === 'optical-flow') {
+        const raw: Array<{ image: PixelImage; timestamp: number }> = [];
+        await extractVideoFrames(
+          activeAsset.file,
+          {
+            start: startTime,
+            end: endTime,
+            fps: retime.sourceFps,
+            signal: controller.signal,
+            onProgress: (done, total) => {
+              setProgress(`Decoding frame ${done} / ${total}`);
+            },
           },
-        },
-        async (frame, i, timestamp) => {
-          index = i;
-          setProgress(`Pixelating frame ${i + 1}`);
-          const { result } = renderItem(item, frame, timestamp);
-          if (wantsVideo && !writerState.writer) {
-            const newWriter = new VideoWriter({
-              width: result.art.width,
-              height: result.art.height,
-              fps: settings.video.fps,
-              codec: settings.video.codec,
-              bitrateMbps: settings.video.bitrateMbps,
-            });
-            writerState.writer = newWriter;
-            writerRef.current = newWriter;
-            await newWriter.start();
+          (frame, i, timestamp) => {
+            raw.push({ image: frame, timestamp });
+            if (i % 4 === 0) setProgress(`Decoding frame ${i + 1}`);
+          },
+        );
+        if (raw.length === 0) throw new Error('No source frames decoded.');
+        const total = Math.max(1, Math.round((endTime - startTime) * outFps));
+        for (let i = 0; i < total; i++) {
+          if (controller.signal.aborted) {
+            throw new DOMException('Video processing cancelled.', 'AbortError');
           }
-          if (wantsVideo && writerState.writer) await writerState.writer.add(result.art, timestamp);
-          if (wantsSheet) frames.push(result.art);
-        },
-      );
+          const time = startTime + i / outFps;
+          const position = (time - startTime) * retime.sourceFps;
+          const sourceIndex = Math.min(raw.length - 1, Math.floor(position));
+          const mix = sourceIndex >= raw.length - 1 ? 0 : position - sourceIndex;
+          const frame =
+            mix <= 0.0001
+              ? raw[sourceIndex].image
+              : interpolateFrame(
+                  raw[sourceIndex].image,
+                  raw[Math.min(raw.length - 1, sourceIndex + 1)].image,
+                  mix,
+                  retime.quality as RetimeQuality,
+                );
+          setProgress(`Interpolating frame ${i + 1} / ${total}`);
+          await addFrame(frame, time);
+        }
+      } else {
+        await extractVideoFrames(
+          activeAsset.file,
+          {
+            start: startTime,
+            end: endTime,
+            fps: extractFps,
+            signal: controller.signal,
+            onProgress: (done, total) => {
+              setProgress(`Decoding frame ${done} / ${total}`);
+            },
+          },
+          async (frame, i, timestamp) => {
+            setProgress(`Pixelating frame ${i + 1}`);
+            await addFrame(frame, timestamp);
+          },
+        );
+      }
 
       const writer = writerState.writer;
       if (writer) {
@@ -306,7 +369,6 @@ export function OutputPanel({ node }: { node: GraphNode }): React.ReactElement {
         resultInfo = await writer.finish();
         writerRef.current = null;
       }
-      void index;
 
       const base = activeAsset.name.replace(/\.[^.]+$/, '') || 'pixelart';
       let sheetOutputs: SheetOutput[] = [];
@@ -317,8 +379,8 @@ export function OutputPanel({ node }: { node: GraphNode }): React.ReactElement {
           setProgress('Packing spritesheet…');
           sheetOutputs = await buildSheetOutputs(
             frames,
-            frames.map(() => 1 / settings.video.fps),
-            settings.video.fps,
+            frames.map(() => 1 / outFps),
+            outFps,
             base,
           );
         } catch (err) {
@@ -376,6 +438,118 @@ export function OutputPanel({ node }: { node: GraphNode }): React.ReactElement {
         notify('Video export cancelled.', 'warn');
       } else {
         notify(`Video export failed: ${err instanceof Error ? err.message : err}`, 'error');
+      }
+    } finally {
+      abortRef.current = null;
+      setBusy(false);
+      setProgress(null);
+    }
+  };
+
+  const exportAnimation = async (): Promise<void> => {
+    if (!hasAnimation) {
+      notify('Add an Animate or Timeline node to export an animation.', 'warn');
+      return;
+    }
+    const fps = Math.max(1, animationFps);
+    const total = Math.max(1, Math.round(animationDuration * fps));
+    const wantsVideo = video.output === 'video' || video.output === 'both';
+    const wantsSheet = video.output === 'spritesheet' || video.output === 'both';
+    const settings = { ...baseSettings, output, video };
+    const controller = new AbortController();
+    abortRef.current = controller;
+    setBusy(true);
+    setProgress('Rendering animation…');
+    try {
+      const frames: PixelImage[] = [];
+      const writerState: { writer: VideoWriter | null } = { writer: null };
+      let resultInfo: Awaited<ReturnType<VideoWriter['finish']>> | null = null;
+
+      for (let i = 0; i < total; i++) {
+        if (controller.signal.aborted) {
+          throw new DOMException('Animation export cancelled.', 'AbortError');
+        }
+        const time = i / fps;
+        if (i % 2 === 0) setProgress(`Rendering animation frame ${i + 1} / ${total}`);
+        const result = renderAnimationFrame(time, true);
+        if (!result) throw new Error('No animation output is connected. Add an Output node.');
+        if (wantsVideo && !writerState.writer) {
+          if (result.art.width > 8192 || result.art.height > 8192) {
+            throw new Error(
+              `Animation frame is ${result.art.width}×${result.art.height}. Reduce the Art size or export scale to keep both sides at 8192px or less.`,
+            );
+          }
+          const newWriter = new VideoWriter({
+            width: result.art.width,
+            height: result.art.height,
+            fps,
+            codec: settings.video.codec,
+            bitrateMbps: settings.video.bitrateMbps,
+          });
+          writerState.writer = newWriter;
+          writerRef.current = newWriter;
+          await newWriter.start();
+        }
+        if (wantsVideo && writerState.writer) await writerState.writer.add(result.art, time);
+        if (wantsSheet) frames.push(result.art);
+      }
+
+      const writer = writerState.writer;
+      if (writer) {
+        setProgress('Finalizing animation video…');
+        resultInfo = await writer.finish();
+        writerRef.current = null;
+      }
+
+      const base = (activeAsset?.name ?? 'animation').replace(/\.[^.]+$/, '') || 'animation';
+      let sheetOutputs: SheetOutput[] = [];
+      if (wantsSheet) {
+        setProgress('Packing animation spritesheet…');
+        sheetOutputs = await buildSheetOutputs(
+          frames,
+          frames.map(() => 1 / fps),
+          fps,
+          base,
+        );
+      }
+
+      if (wantsVideo && resultInfo) {
+        const file = formatFilename(settings.output.filenamePattern, {
+          name: base,
+          width: resultInfo.width,
+          height: resultInfo.height,
+          ext: resultInfo.extension,
+        });
+        if (sheetOutputs.length > 0) {
+          await downloadZip(
+            [
+              { name: file, data: resultInfo.blob },
+              ...sheetOutputs.flatMap((out) => [
+                { name: out.name, data: out.png },
+                { name: out.metaName, data: out.json },
+              ]),
+            ],
+            `${base}-animation.zip`,
+          );
+          notify(
+            `Animation + ${sheetOutputs.length} sheet${sheetOutputs.length === 1 ? '' : 's'} exported (${total} frames).`,
+            'success',
+          );
+        } else {
+          downloadBlob(resultInfo.blob, file);
+          notify(`Animation exported (${total} frames at ${fps} fps).`, 'success');
+        }
+      } else if (sheetOutputs.length > 0) {
+        await downloadSheetOutputs(sheetOutputs, base);
+        notify(`Animation spritesheet exported (${total} frames at ${fps} fps).`, 'success');
+      } else {
+        notify('Animation export produced no output.', 'warn');
+      }
+    } catch (err) {
+      if (err instanceof DOMException && err.name === 'AbortError') {
+        notify('Animation export cancelled.', 'warn');
+      } else {
+        notify(`Animation export failed: ${err instanceof Error ? err.message : err}`, 'error');
       }
     } finally {
       abortRef.current = null;
@@ -633,6 +807,16 @@ export function OutputPanel({ node }: { node: GraphNode }): React.ReactElement {
         ) : null}
 
         <div className="btn-column">
+          {hasAnimation ? (
+            <button
+              type="button"
+              className="primary-btn"
+              onClick={() => void exportAnimation()}
+              disabled={busy || isExporting}
+            >
+              <Icon name="clock" size={15} /> Render timeline animation
+            </button>
+          ) : null}
           <button type="button" className="primary-btn" onClick={() => void exportVideo()} disabled={busy || isExporting}>
             <Icon name="film" size={15} /> Render video / sheet
           </button>

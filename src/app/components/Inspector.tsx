@@ -14,7 +14,13 @@ import { DitherPanel } from './inspectors/DitherPanel';
 import { ExtractPanel, ComposePanel } from './inspectors/LayerPanels';
 import { PreprocessPanel, PostprocessPanel } from './inspectors/EffectPanels';
 import { OutputPanel } from './inspectors/OutputPanel';
-import { AnimatePanel, BackgroundPanel, Object3DPanel } from './inspectors/ScenePanels';
+import {
+  AnimatePanel,
+  BackgroundPanel,
+  Object3DPanel,
+  RetimePanel,
+  TimelinePanel,
+} from './inspectors/ScenePanels';
 import { ConnectionsPanel } from './ConnectionsPanel';
 
 export function Inspector(): React.ReactElement {
@@ -137,6 +143,12 @@ function renderPanel(node: GraphNode): React.ReactElement {
       return <Object3DPanel node={node} />;
     case 'animate':
       return <AnimatePanel node={node} />;
+    case 'timeline':
+      return <TimelinePanel node={node} />;
+    case 'retime':
+      return <RetimePanel node={node} />;
+    case 'group':
+      return <GroupPanel node={node} />;
     case 'preprocess':
       return <PreprocessPanel node={node} />;
     case 'postprocess':
@@ -150,6 +162,47 @@ function renderPanel(node: GraphNode): React.ReactElement {
     default:
       return <div />;
   }
+}
+
+function GroupPanel({ node }: { node: GraphNode }): React.ReactElement {
+  const { graph, duplicateGroup, ungroup, setGroupExpanded } = useStudio();
+  const ids = Array.isArray(node.params.nodeIds) ? (node.params.nodeIds as string[]) : [];
+  const members = graph.nodes.filter((n) => ids.includes(n.id) && n.type !== 'group');
+  const expanded = node.params.expanded !== false;
+  return (
+    <div className="inspector-panel">
+      <div className="stat-strip">
+        <div>
+          <span>Members</span>
+          <strong>{members.length}</strong>
+        </div>
+        <div>
+          <span>View</span>
+          <strong>{expanded ? 'expanded' : 'collapsed'}</strong>
+        </div>
+      </div>
+      <div className="btn-column">
+        <button type="button" className="ghost-btn small" onClick={() => setGroupExpanded(node.id, !expanded)}>
+          <Icon name={expanded ? 'minus' : 'plus'} size={14} /> {expanded ? 'Collapse group' : 'Expand group'}
+        </button>
+        <button type="button" className="ghost-btn small" onClick={() => duplicateGroup(node.id)}>
+          <Icon name="copy" size={14} /> Duplicate whole group
+        </button>
+        <button type="button" className="ghost-btn small danger" onClick={() => ungroup(node.id)}>
+          <Icon name="close" size={14} /> Ungroup
+        </button>
+      </div>
+      <div className="info-callout">
+        <Icon name="layers" size={16} />
+        <span>
+          A group is an organisational box. Its members keep their normal wires and still evaluate
+          independently. Collapse it to a single box with combined input and output dots, or
+          duplicate it to clone every member node and internal wire at once.
+        </span>
+      </div>
+      {members.length === 0 ? <p className="micro-copy">This group no longer has members.</p> : null}
+    </div>
+  );
 }
 
 function MergePanel({ node }: { node: GraphNode }): React.ReactElement {
@@ -253,6 +306,9 @@ function nodeIcon(type: GraphNode['type']): Parameters<typeof Icon>[0]['name'] {
     background: 'background',
     object3d: 'cube',
     animate: 'wave',
+    timeline: 'clock',
+    retime: 'gauge',
+    group: 'layers',
     postprocess: 'settings',
     merge: 'link',
     router: 'link',

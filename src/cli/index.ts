@@ -564,7 +564,7 @@ async function main(): Promise<void> {
     return;
   }
   if (options.version) {
-    console.log('PixelArtify Studio CLI 0.1.0');
+    console.log('PixelArtify Studio CLI 0.2.0');
     return;
   }
   if (options['list-presets']) {

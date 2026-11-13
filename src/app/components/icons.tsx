@@ -43,7 +43,9 @@ type IconName =
   | 'folderOpen'
   | 'background'
   | 'cube'
-  | 'wave';
+  | 'wave'
+  | 'clock'
+  | 'gauge';
 
 const PATHS: Record<IconName, React.ReactNode> = {
   image: (
@@ -212,6 +214,19 @@ const PATHS: Record<IconName, React.ReactNode> = {
     <>
       <path d="M3 12c2-5 4-5 6 0s4 5 6 0 4-5 6 0" />
       <path d="M3 17c2-3 4-3 6 0s4 3 6 0 4-3 6 0" opacity="0.5" />
+    </>
+  ),
+  clock: (
+    <>
+      <circle cx="12" cy="12" r="9" />
+      <path d="M12 7v5l3 2" />
+    </>
+  ),
+  gauge: (
+    <>
+      <path d="M4 18a8 8 0 1 1 16 0" />
+      <path d="m12 14 4-4" />
+      <circle cx="12" cy="14" r="1.5" />
     </>
   ),
 };

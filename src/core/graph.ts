@@ -58,6 +58,7 @@ import { DEFAULT_COLOR_CORRECTION } from './preprocess';
 import { DEFAULT_BACKGROUND, renderBackground, type BackgroundParams } from './background';
 import { DEFAULT_OBJECT3D, renderObject3D, type Render3DParams } from './render3d';
 import { DEFAULT_MOTION, evaluateMotion, type MotionSettings } from './motion';
+import { renderPixelArt } from './pipeline';
 
 export type SocketType = 'media' | 'mask' | 'palette' | 'motion';
 
@@ -238,6 +239,26 @@ export const NODE_DEFS: Record<GraphNodeType, NodeDefinition> = {
     inputs: [],
     outputs: [{ id: 'motion', label: 'Motion', type: 'motion' }],
   },
+  timeline: {
+    type: 'timeline',
+    title: 'Timeline',
+    category: 'source',
+    description:
+      'Stretches still media across time: choose a duration and frame rate, then animate effects and overlays over the image.',
+    accent: '#8b5cf6',
+    inputs: [{ id: 'media', label: 'Media', type: 'media' }],
+    outputs: [{ id: 'media', label: 'Media', type: 'media' }],
+  },
+  retime: {
+    type: 'retime',
+    title: 'Retime',
+    category: 'process',
+    description:
+      'Retimes video. Stop motion drops to a lower frame rate; optical flow interpolates new frames for a smoother result.',
+    accent: '#f472b6',
+    inputs: [{ id: 'media', label: 'Media', type: 'media' }],
+    outputs: [{ id: 'media', label: 'Media', type: 'media' }],
+  },
   postprocess: {
     type: 'postprocess',
     title: 'Post-process',
@@ -274,6 +295,16 @@ export const NODE_DEFS: Record<GraphNodeType, NodeDefinition> = {
       { id: 'mask', label: 'Mask', type: 'mask' },
       { id: 'palette', label: 'Palette', type: 'palette' },
     ],
+  },
+  group: {
+    type: 'group',
+    title: 'Group',
+    category: 'source',
+    description:
+      'A visual container for related nodes. Collapse it to a single box, duplicate the whole group, or ungroup it. The nodes inside keep their normal connections.',
+    accent: '#94a3b8',
+    inputs: [],
+    outputs: [],
   },
   output: {
     type: 'output',
@@ -325,6 +356,15 @@ export interface GraphMediaItem {
   underlay?: PixelImage;
   /** Generated overlay (for example a 3D object) applied on top of frames. */
   overlay?: PixelImage;
+  /** A still stretched into a timeline by the Timeline node. */
+  timeline?: { duration: number; fps: number; loop: boolean };
+  /** Video retiming metadata from the Retime node. */
+  retime?: {
+    mode: 'stop-motion' | 'optical-flow';
+    sourceFps: number;
+    targetFps: number;
+    quality: 'fast' | 'balanced' | 'best';
+  };
   resolution: ResolutionSettings;
   pixelate: PixelateSettings;
   /** True only if a Pixelate node is present in this branch. */
@@ -432,6 +472,17 @@ export function nodeParams(type: GraphNodeType, settings?: PixelArtifySettings):
       return { ...deepClone(DEFAULT_OBJECT3D) };
     case 'animate':
       return { ...deepClone(DEFAULT_MOTION) };
+    case 'timeline':
+      return { duration: 4, fps: 24, loop: true };
+    case 'retime':
+      return {
+        mode: 'stop-motion',
+        sourceFps: 12,
+        targetFps: 12,
+        quality: 'balanced',
+      };
+    case 'group':
+      return { nodeIds: [], expanded: false };
     case 'postprocess':
       return { postprocess: deepClone(s.postprocess) };
     case 'merge':
@@ -970,6 +1021,41 @@ function evaluateNode(
         },
       };
     }
+    case 'timeline': {
+      if (!media) return null;
+      const timeline = {
+        duration: Math.max(0.1, Number(node.params.duration ?? 4) || 4),
+        fps: Math.max(1, Math.round(Number(node.params.fps ?? 24) || 24)),
+        loop: node.params.loop !== false,
+      };
+      return {
+        media: {
+          type: 'media',
+          items: media.items.map((item) =>
+            item.kind === 'image' ? { ...item, timeline } : item,
+          ),
+        },
+      };
+    }
+    case 'retime': {
+      if (!media) return null;
+      const mode = node.params.mode === 'optical-flow' ? 'optical-flow' : 'stop-motion';
+      const retime = {
+        mode: mode as 'stop-motion' | 'optical-flow',
+        sourceFps: Math.max(1, Math.min(120, Number(node.params.sourceFps ?? 12) || 12)),
+        targetFps: Math.max(1, Math.min(120, Number(node.params.targetFps ?? 12) || 12)),
+        quality:
+          node.params.quality === 'fast' || node.params.quality === 'best'
+            ? (node.params.quality as 'fast' | 'best')
+            : ('balanced' as const),
+      };
+      return {
+        media: {
+          type: 'media',
+          items: media.items.map((item) => ({ ...item, retime })),
+        },
+      };
+    }
     case 'background': {
       const params: BackgroundParams = {
         ...deepClone(DEFAULT_BACKGROUND),
@@ -1001,11 +1087,12 @@ function evaluateNode(
         media: {
           type: 'media',
           items: media.items.map((item) => {
-            const backdrop = renderBackground(item.sourceWidth, item.sourceHeight, params);
-            const underlay = item.underlay ? compositeOver(backdrop, item.underlay) : backdrop;
+            const base = bakeGeneratorInput(item);
+            const backdrop = renderBackground(base.sourceWidth, base.sourceHeight, params);
+            const underlay = base.underlay ? compositeOver(backdrop, base.underlay) : backdrop;
             return {
-              ...item,
-              source: compositeOver(backdrop, item.source),
+              ...base,
+              source: compositeOver(backdrop, base.source),
               underlay,
             };
           }),
@@ -1053,10 +1140,11 @@ function evaluateNode(
         media: {
           type: 'media',
           items: media.items.map((item) => {
+            const base = bakeGeneratorInput(item);
             // With an input the object is an overlay, so a solid background
             // would hide the source. The Background node handles backdrops.
-            let width = item.sourceWidth;
-            let height = item.sourceHeight;
+            let width = base.sourceWidth;
+            let height = base.sourceHeight;
             const cap = options.maxGeneratedSide;
             if (cap && Math.max(width, height) > cap) {
               const scale = cap / Math.max(width, height);
@@ -1067,13 +1155,13 @@ function evaluateNode(
               ...params,
               background: 'transparent',
             });
-            if (width !== item.sourceWidth || height !== item.sourceHeight) {
-              object = resizeImage(object, item.sourceWidth, item.sourceHeight, 'nearest');
+            if (width !== base.sourceWidth || height !== base.sourceHeight) {
+              object = resizeImage(object, base.sourceWidth, base.sourceHeight, 'nearest');
             }
-            const overlay = item.overlay ? compositeOver(item.overlay, object) : object;
+            const overlay = base.overlay ? compositeOver(base.overlay, object) : object;
             return {
-              ...item,
-              source: compositeOver(item.source, object),
+              ...base,
+              source: compositeOver(base.source, object),
               overlay,
             };
           }),
@@ -1355,6 +1443,69 @@ function hashParams(value: unknown): string {
   return (hash >>> 0).toString(36);
 }
 
+function hasAccumulatedProcessing(item: GraphMediaItem): boolean {
+  return (
+    item.pixelateEnabled ||
+    item.paletteEnabled ||
+    item.ditherEnabled ||
+    item.preprocessOps.length > 0 ||
+    item.latePreprocessOps.length > 0 ||
+    item.postprocess.ops.length > 0 ||
+    item.layers.length > 0
+  );
+}
+
+/**
+ * Generators (Background, 3D object) sit at a specific point in the graph.
+ * Upstream processing must be baked in before the generated pixels are added;
+ * otherwise the output pipeline re-applies those upstream settings to the
+ * generated pixels and a 3D object added near the end gets pixelated, dithered
+ * and post-processed by nodes that came before it.
+ *
+ * After baking, the item starts a fresh downstream stage. Palette, dither,
+ * pixelate and effects nodes that come *after* the generator set their flags
+ * again and therefore still apply normally.
+ */
+function bakeGeneratorInput(item: GraphMediaItem): GraphMediaItem {
+  // Video frames are decoded live; baking a still frame here would make the
+  // playback path diverge from the graph. Keep video behaviour as before.
+  if (item.kind !== 'image' || !hasAccumulatedProcessing(item)) return item;
+  try {
+    const result = renderPixelArt(
+      { image: item.source, masks: item.masks, settings: settingsFromItem(item) },
+      { upscale: false, seed: 0 },
+    );
+    const image = result.artAtPixelScale;
+    const masks: Record<string, MaskData> = {};
+    for (const [id, mask] of Object.entries(item.masks)) {
+      masks[id] =
+        mask.width === image.width && mask.height === image.height
+          ? mask
+          : resizeMask(mask, image.width, image.height);
+    }
+    return {
+      ...item,
+      source: image,
+      sourceWidth: image.width,
+      sourceHeight: image.height,
+      masks,
+      preprocessOps: [],
+      latePreprocessOps: [],
+      postprocess: { ops: [], lockPalette: false },
+      pixelateEnabled: false,
+      paletteEnabled: false,
+      ditherEnabled: false,
+      layers: [],
+      stage: 'art',
+      underlay: undefined,
+      overlay: undefined,
+    };
+  } catch (err) {
+    console.warn('PixelArtify: could not bake upstream processing for a generator.', err);
+    return item;
+  }
+}
+
 /** Wrap an image produced by a generator node (background, 3D object). */
 function makeGeneratedItem(
   node: GraphNode,
@@ -1484,6 +1635,8 @@ export function stopStageForNode(type: GraphNodeType): 'source' | 'preprocess' |
     case 'background':
     case 'object3d':
     case 'animate':
+    case 'timeline':
+    case 'retime':
       return 'source';
     case 'preprocess':
     case 'color':

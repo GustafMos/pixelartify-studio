@@ -21,6 +21,7 @@ import {
   defaultSettings,
   extractPalette,
   generateHarmony,
+  interpolateFrame,
   layoutPrintPages,
   packSpritesheet,
   packSpritesheets,
@@ -908,6 +909,53 @@ describe('animation', () => {
     expect(wrapped.x).toBeCloseTo(0.2);
   });
 
+  it('bakes upstream processing before a generator and starts a new downstream stage', () => {
+    const s = defaultSettings();
+    const input = createNode('input', 0, 0, { label: 'Media' }, s);
+    const pixelate = createNode('pixelate', 160, 0, {
+      resolution: { ...s.resolution, mode: 'short-side', value: 32 },
+      pixelate: { ...s.pixelate },
+    }, s);
+    const object = createNode('object3d', 320, 0, {
+      primitive: 'cube',
+      width: 64,
+      height: 64,
+      antiAlias: 0,
+    }, s);
+    const palette = createNode('palette', 480, 0, {
+      palette: { ...s.palette, mode: 'custom', colors: ['#111827', '#e8a33d'] },
+    }, s);
+    let graph = {
+      id: 'g',
+      name: 'ordered',
+      description: '',
+      nodes: [input, pixelate, object, palette],
+      edges: [],
+    } as PipelineGraph;
+    graph = connect(graph, input.id, 'media', pixelate.id, 'media');
+    graph = connect(graph, pixelate.id, 'media', object.id, 'media');
+    graph = connect(graph, object.id, 'media', palette.id, 'media');
+    const asset: GraphAsset = {
+      id: 'source',
+      name: 'source.png',
+      kind: 'image',
+      width: 64,
+      height: 64,
+      image: gradient(64, 64),
+    };
+    const evaluation = evaluateGraph(graph, { assetsByNode: { [input.id]: [asset] } });
+    const afterObject = mediaAtPort(evaluation, object.id)[0];
+    // The pixelate node before the 3D object has been baked to 32×32, and the
+    // generator resets the pipeline flags so the object is not re-processed.
+    expect(afterObject.sourceWidth).toBe(32);
+    expect(afterObject.sourceHeight).toBe(32);
+    expect(afterObject.pixelateEnabled).toBe(false);
+    expect(afterObject.paletteEnabled).toBe(false);
+    // A palette node after the generator still applies downstream.
+    const afterPalette = mediaAtPort(evaluation, palette.id)[0];
+    expect(afterPalette.paletteEnabled).toBe(true);
+  });
+
   it('animates a generated 3D scene over time', () => {
     const s = defaultSettings();
     const background = createNode('background', 0, 0, { mode: 'solid', colorA: '#111827', width: 64, height: 64 }, s);
@@ -939,6 +987,68 @@ describe('animation', () => {
     const first = sample(0);
     const second = sample(0.5);
     expect(second).not.toEqual(first);
+  });
+
+  it('stretches still media with the Timeline node and tags video retiming', () => {
+    const s = defaultSettings();
+    const input = createNode('input', 0, 0, { label: 'Media' }, s);
+    const timeline = createNode('timeline', 200, 0, { duration: 3, fps: 12, loop: true }, s);
+    const retime = createNode('retime', 400, 0, {
+      mode: 'optical-flow',
+      sourceFps: 12,
+      targetFps: 24,
+      quality: 'fast',
+    }, s);
+    let graph = {
+      id: 'g',
+      name: 'timeline',
+      description: '',
+      nodes: [input, timeline, retime],
+      edges: [],
+    } as PipelineGraph;
+    graph = connect(graph, input.id, 'media', timeline.id, 'media');
+    graph = connect(graph, timeline.id, 'media', retime.id, 'media');
+    const asset: GraphAsset = {
+      id: 'still',
+      name: 'still.png',
+      kind: 'image',
+      width: 32,
+      height: 32,
+      image: gradient(32, 32),
+    };
+    const evaluation = evaluateGraph(graph, { assetsByNode: { [input.id]: [asset] } });
+    const item = mediaAtPort(evaluation, retime.id)[0];
+    expect(item.timeline).toEqual({ duration: 3, fps: 12, loop: true });
+    expect(item.retime).toMatchObject({ mode: 'optical-flow', sourceFps: 12, targetFps: 24 });
+  });
+
+  it('interpolates between frames without changing identical frames', () => {
+    const still = gradient(32, 32);
+    expect(interpolateFrame(still, still, 0.5, 'fast').data).toEqual(still.data);
+
+    const a = createImage(48, 32);
+    const b = createImage(48, 32);
+    for (let y = 8; y < 24; y++) {
+      for (let x = 4; x < 20; x++) {
+        const i = (y * 48 + x) * 4;
+        a.data[i] = 240;
+        a.data[i + 1] = 180;
+        a.data[i + 2] = 40;
+        a.data[i + 3] = 255;
+      }
+      for (let x = 28; x < 44; x++) {
+        const i = (y * 48 + x) * 4;
+        b.data[i] = 240;
+        b.data[i + 1] = 180;
+        b.data[i + 2] = 40;
+        b.data[i + 3] = 255;
+      }
+    }
+    const mid = interpolateFrame(a, b, 0.5, 'fast');
+    expect(mid.width).toBe(48);
+    expect(mid.data).not.toEqual(a.data);
+    expect(mid.data).not.toEqual(b.data);
+    expect(mid.data.some((value, index) => index % 4 === 3 && value > 0)).toBe(true);
   });
 
   it('animates film grain and noise displacement', () => {

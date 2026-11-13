@@ -131,7 +131,7 @@ export function App(): React.ReactElement {
               ? 'graph ok'
               : `${evaluation.errors.length + graphErrors.length} warning(s)`}
           </span>
-          <span className="status-version">PixelArtify Studio 0.1.0</span>
+          <span className="status-version">PixelArtify Studio 0.2.0</span>
         </div>
       </footer>
 
