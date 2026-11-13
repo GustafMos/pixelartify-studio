@@ -544,13 +544,17 @@ export class VideoWriter {
     const audioSamples = this.options.audioSamples;
     if (audioSamples && audioSamples.length > 0) {
       const audioCodecs: AudioCodec[] =
-        this.resolvedFormat === 'webm' ? ['opus', 'vorbis'] : ['aac', 'mp3', 'opus'];
+        this.resolvedFormat === 'webm'
+          ? ['opus', 'vorbis', 'pcm-s16']
+          : ['aac', 'mp3', 'opus', 'pcm-s16', 'pcm-f32'];
       const audioCodec = await getFirstEncodableAudioCodec(audioCodecs).catch(() => null);
       if (audioCodec) {
         try {
-          // Audio uses its own (much lower) bitrate; never reuse the video bitrate.
+          // Audio uses its own (much lower) bitrate; PCM codecs ignore quality.
           const audioQuality = new Quality({ bitrate: 160_000 });
-          const audioSource = new AudioSampleSource({ codec: audioCodec, quality: audioQuality });
+          const audioSource = audioCodec.startsWith('pcm-')
+            ? new AudioSampleSource({ codec: audioCodec })
+            : new AudioSampleSource({ codec: audioCodec, quality: audioQuality });
           output.addAudioTrack(audioSource);
           this.audioSource = audioSource;
         } catch {
