@@ -7,6 +7,9 @@
 
 import {
   ALL_FORMATS,
+  AudioSample,
+  AudioSampleSink,
+  AudioSampleSource,
   BlobSource,
   BufferTarget,
   CanvasSource,
@@ -18,6 +21,7 @@ import {
   VideoSampleSink,
   WebMOutputFormat,
   canEncodeVideo,
+  getFirstEncodableAudioCodec,
   type InputVideoTrack,
   type VideoCodec,
   type VideoSample,
@@ -396,12 +400,56 @@ export async function extractVideoFrames(
 
 export type WriterCodec = 'avc' | 'hevc' | 'vp9' | 'av1' | 'prores';
 
+/**
+ * Decode the source's audio track into samples (re-stamped to be relative to
+ * `start`, matching the video frames' 0-based timeline).
+ */
+export async function decodeAudioSamples(
+  file: File,
+  start: number,
+  end: number,
+): Promise<AudioSample[]> {
+  const input = createInput(file);
+  try {
+    const audioTrack = await input.getPrimaryAudioTrack().catch(() => null);
+    if (!audioTrack) return [];
+    const sink = new AudioSampleSink(audioTrack);
+    const samples: AudioSample[] = [];
+    for await (const sample of sink.samples(start, end)) {
+      if (start > 0) {
+        // Re-stamp to the export's relative timeline.
+        const format = sample.format;
+        const size = sample.allocationSize({ format, planeIndex: 0 });
+        const data = new Uint8Array(size);
+        sample.copyTo(data, { format, planeIndex: 0 });
+        samples.push(
+          new AudioSample({
+            data,
+            format,
+            numberOfChannels: sample.numberOfChannels,
+            sampleRate: sample.sampleRate,
+            timestamp: Math.max(0, sample.timestamp - start),
+          }),
+        );
+        sample.close();
+      } else {
+        samples.push(sample);
+      }
+    }
+    return samples;
+  } finally {
+    input.dispose();
+  }
+}
+
 export interface VideoWriterOptions {
   width: number;
   height: number;
   fps: number;
   codec: WriterCodec;
   bitrateMbps: number;
+  /** Optional decoded audio to mux into the output. */
+  audioSamples?: AudioSample[];
   onProgress?: (done: number) => void;
 }
 
@@ -433,6 +481,8 @@ export class VideoWriter {
   private ctx: CanvasRenderingContext2D;
   private resolvedCodec: VideoCodec = 'avc';
   private resolvedFormat: 'mp4' | 'webm' | 'mov' = 'mp4';
+  private audioSource: AudioSampleSource | null = null;
+  private audioIndex = 0;
   private started = false;
   private finished = false;
   private frames = 0;
@@ -488,6 +538,22 @@ export class VideoWriter {
     });
     const source = new CanvasSource(this.canvas, { codec: chosen, quality });
     output.addVideoTrack(source, { frameRate: fps });
+
+    // Mux the original audio when available.
+    const audioSamples = this.options.audioSamples;
+    if (audioSamples && audioSamples.length > 0) {
+      const audioCodec = await getFirstEncodableAudioCodec(['aac', 'opus', 'mp3', 'vorbis']).catch(() => null);
+      if (audioCodec) {
+        try {
+          const audioSource = new AudioSampleSource({ codec: audioCodec, quality });
+          output.addAudioTrack(audioSource);
+          this.audioSource = audioSource;
+        } catch {
+          this.audioSource = null;
+        }
+      }
+    }
+
     await output.start();
     this.output = output;
     this.source = source;
@@ -501,6 +567,17 @@ export class VideoWriter {
     const canvas = pixelImageToCanvas(image);
     this.ctx.drawImage(canvas, 0, 0, this.width, this.height);
     await this.source.add(timestamp, 1 / this.options.fps);
+
+    // Feed audio samples up to (a little past) this video frame's timestamp.
+    const audioSamples = this.options.audioSamples ?? [];
+    if (this.audioSource) {
+      const horizon = timestamp + 1 / this.options.fps + 0.001;
+      while (this.audioIndex < audioSamples.length && audioSamples[this.audioIndex].timestamp <= horizon) {
+        await this.audioSource.add(audioSamples[this.audioIndex]);
+        this.audioIndex++;
+      }
+    }
+
     this.frames++;
     this.options.onProgress?.(this.frames);
   }
@@ -509,6 +586,14 @@ export class VideoWriter {
     if (!this.output || !this.started) throw new Error('VideoWriter not started.');
     if (this.finished) throw new Error('VideoWriter already finished.');
     this.finished = true;
+    // Drain any remaining audio samples.
+    const audioSamples = this.options.audioSamples ?? [];
+    if (this.audioSource) {
+      while (this.audioIndex < audioSamples.length) {
+        await this.audioSource.add(audioSamples[this.audioIndex]);
+        this.audioIndex++;
+      }
+    }
     await this.output.finalize();
     const buffer = (this.output.target as BufferTarget).buffer;
     if (!buffer) throw new Error('Video encoding produced no data.');

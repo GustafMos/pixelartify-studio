@@ -28,7 +28,7 @@ import {
   downloadZip,
   pixelImageToBlob,
 } from '../../io';
-import { VideoWriter, extractVideoFrames } from '../../video';
+import { VideoWriter, extractVideoFrames, decodeAudioSamples } from '../../video';
 import {
   Badge,
   IconButton,
@@ -302,6 +302,16 @@ export function OutputPanel({ node }: { node: GraphNode }): React.ReactElement {
       const startTime = start;
       const endTime = video.end !== null ? Math.min(duration, Math.max(startTime + 0.05, video.end)) : duration;
 
+      // Decode the source audio once so it can be muxed into the output video.
+      let audioSamples: Awaited<ReturnType<typeof decodeAudioSamples>> = [];
+      if (wantsVideo) {
+        try {
+          audioSamples = await decodeAudioSamples(activeAsset.file, startTime, endTime);
+        } catch {
+          audioSamples = [];
+        }
+      }
+
       const addFrame = async (image: PixelImage, timestamp: number): Promise<void> => {
         const { result } = renderItem(item, image, timestamp);
         if (wantsVideo && !writerState.writer) {
@@ -311,6 +321,7 @@ export function OutputPanel({ node }: { node: GraphNode }): React.ReactElement {
             fps: outFps,
             codec: settings.video.codec,
             bitrateMbps: settings.video.bitrateMbps,
+            audioSamples,
           });
           writerState.writer = newWriter;
           writerRef.current = newWriter;
@@ -806,8 +817,8 @@ export function OutputPanel({ node }: { node: GraphNode }): React.ReactElement {
         {progress ? <p className="progress-line">{progress}</p> : null}
         {busy ? <div className="progress-bar"><span /></div> : null}
         <p className="micro-copy">
-          Browser video export uses WebCodecs. Audio is not re-muxed; use the CLI with ffmpeg when you need the
-          original soundtrack. Transparent pixels are flattened for H.264/VP9 output.
+          Browser video export uses WebCodecs and muxes the original audio track (when the source has one and the
+          browser can encode it). Transparent pixels are flattened for H.264/VP9 output.
         </p>
       </Section>
 
