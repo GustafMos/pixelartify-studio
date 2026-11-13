@@ -480,7 +480,7 @@ export function PaletteStudio(): React.ReactElement {
                 className="ghost-btn small"
                 onClick={() =>
                   downloadText(
-                    serializePalette(colors, fmt, saveName || 'PixelArtify Palette'),
+                    serializePalette(colors, fmt, saveName || 'RipScorpy Palette'),
                     `palette.${fmt === 'jasc' ? 'pal' : fmt === 'paintnet' ? 'txt' : fmt}`,
                     'text/plain',
                   )

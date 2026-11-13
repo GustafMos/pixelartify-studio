@@ -3,6 +3,7 @@ import { createRoot } from 'react-dom/client';
 import { StudioProvider } from './store';
 import { App } from './App';
 import { PopupViewer } from './PopupViewer';
+import { registerBuiltinPlugins } from './components/inspectors/PluginPanel';
 import { setGlobalPixelator, setGlobalDitherFinisher, setGlobalLayerCompositor } from '../core/pipeline';
 import { setGlobalResizer } from '../core/image';
 import { setGlobalEffectAccelerator } from '../core/preprocess';
@@ -20,6 +21,7 @@ setGlobalDitherFinisher(gpuDither);
 setGlobalResizer(gpuResize);
 setGlobalEffectAccelerator(applyGpuEffects);
 setGlobalLayerCompositor(gpuCompositeLayers);
+registerBuiltinPlugins();
 
 class ErrorBoundary extends React.Component<
   { children: React.ReactNode },
@@ -35,7 +37,7 @@ class ErrorBoundary extends React.Component<
     if (this.state.error) {
       return (
         <div className="fatal-error">
-          <h1>PixelArtify Studio hit an error</h1>
+          <h1>RipScorpy Media Processing Suite hit an error</h1>
           <p>{this.state.error.message}</p>
           <button type="button" onClick={() => window.location.reload()}>
             Reload

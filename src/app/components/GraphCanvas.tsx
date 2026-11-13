@@ -51,6 +51,9 @@ export const TYPE_ICON: Record<GraphNodeType, IconName> = {
   switcher: 'link',
   shape2d: 'shape',
   particles: 'sparkles',
+  plugin: 'sparkles',
+  vectorize: 'vector',
+  rasterize: 'vector',
   output: 'download',
 };
 
@@ -226,6 +229,12 @@ function summaryFor(node: GraphNode, assetCount: number): string {
       return `${String(p.shape ?? 'circle')} · ${String(p.fill ?? 'solid')}`;
     case 'particles':
       return `${String(p.preset ?? 'dust')} · ${Number(p.count ?? 0)} particles`;
+    case 'plugin':
+      return String(p.pluginId ?? 'no plugin');
+    case 'vectorize':
+      return `${p.merge ? 'merged rects' : 'per-pixel rects'}`;
+    case 'rasterize':
+      return 'rects → pixels';
     case 'output': {
       const output = p.output as { format?: string } | undefined;
       const video = p.video as { output?: string } | undefined;
@@ -808,7 +817,9 @@ export function GraphCanvas(): React.ReactElement {
           ? '#22d3ee'
           : type === 'value'
             ? '#fbbf24'
-            : '#4cc9f0';
+            : type === 'vector'
+              ? '#8ecae6'
+              : '#4cc9f0';
 
   return (
     <div className="graph-shell">

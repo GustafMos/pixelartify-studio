@@ -11,6 +11,7 @@ import {
   BufferTarget,
   CanvasSource,
   Input,
+  MovOutputFormat,
   Mp4OutputFormat,
   Output,
   Quality,
@@ -393,7 +394,7 @@ export async function extractVideoFrames(
   }
 }
 
-export type WriterCodec = 'avc' | 'hevc' | 'vp9' | 'av1';
+export type WriterCodec = 'avc' | 'hevc' | 'vp9' | 'av1' | 'prores';
 
 export interface VideoWriterOptions {
   width: number;
@@ -407,15 +408,17 @@ export interface VideoWriterOptions {
 export interface VideoWriterResult {
   blob: Blob;
   mimeType: string;
-  extension: 'mp4' | 'webm';
+  extension: 'mp4' | 'webm' | 'mov';
   codec: WriterCodec;
   width: number;
   height: number;
 }
 
-/** HEVC is carried in MP4 (hvc1/hev1); WebM is used for VP9. */
-function containerForCodec(codec: WriterCodec): 'mp4' | 'webm' {
-  return codec === 'vp9' ? 'webm' : 'mp4';
+/** HEVC/ProRes are carried in ISO-BMFF (MP4/MOV); WebM is used for VP9. */
+function containerForCodec(codec: WriterCodec): 'mp4' | 'webm' | 'mov' {
+  if (codec === 'vp9') return 'webm';
+  if (codec === 'prores') return 'mov';
+  return 'mp4';
 }
 
 /**
@@ -429,7 +432,7 @@ export class VideoWriter {
   private canvas: HTMLCanvasElement;
   private ctx: CanvasRenderingContext2D;
   private resolvedCodec: VideoCodec = 'avc';
-  private resolvedFormat: 'mp4' | 'webm' = 'mp4';
+  private resolvedFormat: 'mp4' | 'webm' | 'mov' = 'mp4';
   private started = false;
   private finished = false;
   private frames = 0;
@@ -451,18 +454,23 @@ export class VideoWriter {
     const { fps, bitrateMbps } = this.options;
     const quality = new Quality({ bitrate: bitrateMbps * 1_000_000 });
     const candidates: WriterCodec[] = [];
-    for (const codec of [this.options.codec, 'avc', 'hevc', 'vp9', 'av1'] as const) {
+    for (const codec of [this.options.codec, 'avc', 'hevc', 'vp9', 'av1', 'prores'] as const) {
       if (!candidates.includes(codec)) candidates.push(codec);
     }
 
     let chosen: WriterCodec | null = null;
-    let chosenFormat: Mp4OutputFormat | WebMOutputFormat | null = null;
+    let chosenFormat: Mp4OutputFormat | WebMOutputFormat | MovOutputFormat | null = null;
     for (const codec of candidates) {
       if (!(await canEncodeVideo(codec, { width: this.width, height: this.height, frameRate: fps, quality }))) {
         continue;
       }
       const formatKind = containerForCodec(codec);
-      const format = formatKind === 'webm' ? new WebMOutputFormat() : new Mp4OutputFormat();
+      const format =
+        formatKind === 'webm'
+          ? new WebMOutputFormat()
+          : formatKind === 'mov'
+            ? new MovOutputFormat()
+            : new Mp4OutputFormat();
       if (!format.getSupportedVideoCodecs().includes(codec)) continue;
       chosen = codec;
       chosenFormat = format;
@@ -470,7 +478,7 @@ export class VideoWriter {
       break;
     }
     if (!chosen || !chosenFormat) {
-      throw new Error('This browser cannot encode H.264/AVC, H.265/HEVC, VP9 or AV1 video.');
+      throw new Error('This browser cannot encode H.264/AVC, H.265/HEVC, VP9, AV1 or ProRes video.');
     }
     this.resolvedCodec = chosen;
 
@@ -504,7 +512,12 @@ export class VideoWriter {
     await this.output.finalize();
     const buffer = (this.output.target as BufferTarget).buffer;
     if (!buffer) throw new Error('Video encoding produced no data.');
-    const mimeType = this.resolvedFormat === 'webm' ? 'video/webm' : 'video/mp4';
+    const mimeType =
+      this.resolvedFormat === 'webm'
+        ? 'video/webm'
+        : this.resolvedFormat === 'mov'
+          ? 'video/quicktime'
+          : 'video/mp4';
     return {
       blob: new Blob([buffer], { type: mimeType }),
       mimeType,
@@ -525,7 +538,7 @@ export class VideoWriter {
 
 export async function supportedVideoCodecs(): Promise<WriterCodec[]> {
   const out: WriterCodec[] = [];
-  for (const codec of ['avc', 'hevc', 'vp9', 'av1'] as const) {
+  for (const codec of ['avc', 'hevc', 'vp9', 'av1', 'prores'] as const) {
     if (await canEncodeVideo(codec, { width: 640, height: 360 })) out.push(codec);
   }
   return out;

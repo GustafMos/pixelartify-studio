@@ -3,7 +3,7 @@ import { NODE_DEFS } from '../../core/graph';
 import type { GraphNode } from '../../core/types';
 import { useStudio } from '../store';
 import { nodeCpuWarning } from '../bottlenecks';
-import { Badge, EmptyState, IconButton, TextField } from './controls';
+import { Badge, EmptyState, IconButton, TextField, Toggle } from './controls';
 import { Icon } from './icons';
 import { InputPanel } from './inspectors/InputPanel';
 import { CropPanel, ResizePanel, ChannelsPanel } from './inspectors/GeometryPanels';
@@ -28,6 +28,7 @@ import {
   TransformPanel,
 } from './inspectors/ValuePanels';
 import { Shape2DPanel, ParticlesPanel } from './inspectors/ShapePanels';
+import { PluginPanel } from './inspectors/PluginPanel';
 import { ConnectionsPanel } from './ConnectionsPanel';
 
 export function Inspector(): React.ReactElement {
@@ -180,6 +181,12 @@ function renderPanel(node: GraphNode): React.ReactElement {
       return <Shape2DPanel node={node} />;
     case 'particles':
       return <ParticlesPanel node={node} />;
+    case 'plugin':
+      return <PluginPanel node={node} />;
+    case 'vectorize':
+      return <VectorizePanel node={node} />;
+    case 'rasterize':
+      return <RasterizePanel node={node} />;
     default:
       return <div />;
   }
@@ -311,6 +318,49 @@ function SwitcherPanel({ node }: { node: GraphNode }): React.ReactElement {
   );
 }
 
+function VectorizePanel({ node }: { node: GraphNode }): React.ReactElement {
+  const { updateNodeParams } = useStudio();
+  const merge = Number(node.params.merge ?? 1) > 0.5;
+  const skipTransparent = Number(node.params.skipTransparent ?? 1) > 0.5;
+  return (
+    <div className="inspector-panel">
+      <div className="info-callout">
+        <Icon name="vector" size={16} />
+        <span>
+          Converts the raster to a vector of axis-aligned rectangles — each pixel becomes a rect.
+        </span>
+      </div>
+      <Toggle
+        label="Merge same-colour runs"
+        checked={merge}
+        onChange={(v) => updateNodeParams(node.id, { merge: v ? 1 : 0 })}
+        hint="Merge adjacent identical pixels into larger rectangles (fewer, bigger rects)."
+      />
+      <Toggle
+        label="Skip transparent pixels"
+        checked={skipTransparent}
+        onChange={(v) => updateNodeParams(node.id, { skipTransparent: v ? 1 : 0 })}
+      />
+      <p className="micro-copy">Connect the Vector output to a Vector → Raster node, or import an SVG via the Media input.</p>
+    </div>
+  );
+}
+
+function RasterizePanel({ node }: { node: GraphNode }): React.ReactElement {
+  void node;
+  return (
+    <div className="inspector-panel">
+      <div className="info-callout">
+        <Icon name="vector" size={16} />
+        <span>
+          Renders the connected vector (a list of rectangles) back into a raster image.
+        </span>
+      </div>
+      <p className="micro-copy">Connect a Raster → Vector output (or an SVG asset) to this node's Vector input.</p>
+    </div>
+  );
+}
+
 function RouterPanel({ node }: { node: GraphNode }): React.ReactElement {
   const { graph } = useStudio();
   const inputs = graph.edges.filter((e) => e.toNode === node.id);
@@ -387,6 +437,9 @@ function nodeIcon(type: GraphNode['type']): Parameters<typeof Icon>[0]['name'] {
     switcher: 'link',
     shape2d: 'shape',
     particles: 'sparkles',
+    plugin: 'sparkles',
+    vectorize: 'vector',
+    rasterize: 'vector',
     output: 'download',
   };
   return map[type];

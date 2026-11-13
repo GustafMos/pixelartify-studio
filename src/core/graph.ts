@@ -65,8 +65,11 @@ import { transformImage, transformMask, DEFAULT_TRANSFORM } from './transform';
 import { DEFAULT_REGION } from './region';
 import { renderShape2D, DEFAULT_SHAPE2D } from './shape2d';
 import { renderParticles, DEFAULT_PARTICLES } from './particles';
+import { getPluginNode, pluginDefaults } from './plugins';
+import { rasterToVector, vectorToRaster, DEFAULT_RASTERIZE } from './vector';
+import type { VectorData } from './types';
 
-export type SocketType = 'media' | 'mask' | 'palette' | 'motion' | 'value';
+export type SocketType = 'media' | 'mask' | 'palette' | 'motion' | 'value' | 'vector';
 
 export interface NodePortDef {
   id: string;
@@ -384,6 +387,35 @@ export const NODE_DEFS: Record<GraphNodeType, NodeDefinition> = {
     ],
     outputs: [{ id: 'media', label: 'Media', type: 'media' }],
   },
+  plugin: {
+    type: 'plugin',
+    title: 'Plugin',
+    category: 'process',
+    description:
+      'A user-defined node loaded from a plugin file. Choose the plugin and adjust its parameters.',
+    accent: '#94a3b8',
+    inputs: [{ id: 'media', label: 'Media', type: 'media' }],
+    outputs: [{ id: 'media', label: 'Media', type: 'media' }],
+  },
+  vectorize: {
+    type: 'vectorize',
+    title: 'Raster → Vector',
+    category: 'process',
+    description:
+      'Convert a raster image to a vector of axis-aligned rectangles (each pixel becomes a rect, merged where colours match).',
+    accent: '#8ecae6',
+    inputs: [{ id: 'media', label: 'Media', type: 'media' }],
+    outputs: [{ id: 'vector', label: 'Vector', type: 'vector' }],
+  },
+  rasterize: {
+    type: 'rasterize',
+    title: 'Vector → Raster',
+    category: 'process',
+    description: 'Render a vector of rectangles back into a raster image.',
+    accent: '#8ecae6',
+    inputs: [{ id: 'vector', label: 'Vector', type: 'vector' }],
+    outputs: [{ id: 'media', label: 'Media', type: 'media' }],
+  },
   group: {
     type: 'group',
     title: 'Group',
@@ -503,7 +535,8 @@ export type GraphValue =
   | { type: 'mask'; items: GraphMaskItem[] }
   | { type: 'palette'; items: GraphPaletteItem[] }
   | { type: 'motion'; settings: MotionSettings }
-  | { type: 'value'; value: number };
+  | { type: 'value'; value: number }
+  | { type: 'vector'; data: VectorData };
 
 export interface GraphError {
   nodeId?: string;
@@ -637,6 +670,12 @@ export function nodeParams(type: GraphNodeType, settings?: PixelArtifySettings):
       return { ...deepClone(DEFAULT_SHAPE2D) };
     case 'particles':
       return { ...deepClone(DEFAULT_PARTICLES) };
+    case 'plugin':
+      return { pluginId: '', params: {} };
+    case 'vectorize':
+      return { ...deepClone(DEFAULT_RASTERIZE) };
+    case 'rasterize':
+      return {};
     case 'output':
       return { output: deepClone(s.output), video: deepClone(s.video), label: 'Output' };
     default:
@@ -1427,6 +1466,38 @@ function evaluateNode(
       }
       return {
         media: compositeGeneratedOverMedia(media, options, (w, h) => renderParticles(w, h, params, options.time ?? 0)),
+      };
+    }
+    case 'plugin': {
+      if (!media) return null;
+      const pluginId = String(node.params.pluginId ?? '');
+      const plugin = getPluginNode(pluginId);
+      if (!plugin) return { media };
+      const defaults = pluginDefaults(plugin);
+      const params: Record<string, number> = { ...defaults, ...((node.params.params as Record<string, number>) ?? {}) };
+      return {
+        media: {
+          type: 'media',
+          items: media.items.map((item) => {
+            const source = plugin.apply(item.source, params);
+            return { ...item, source };
+          }),
+        },
+      };
+    }
+    case 'vectorize': {
+      if (!media) return null;
+      const params = { ...deepClone(DEFAULT_RASTERIZE), ...(node.params as Partial<typeof DEFAULT_RASTERIZE>) };
+      const item = media.items[0];
+      const data = rasterToVector(item.source, params);
+      return { vector: { type: 'vector', data } };
+    }
+    case 'rasterize': {
+      const vectorInput = inputs.get('vector')?.[0];
+      if (!vectorInput || vectorInput.type !== 'vector') return null;
+      const image = vectorToRaster(vectorInput.data);
+      return {
+        media: { type: 'media', items: [makeGeneratedItem(node, image, 'Vector', options.time ?? 0)] },
       };
     }
     case 'postprocess': {

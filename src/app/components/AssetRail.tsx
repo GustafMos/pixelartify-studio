@@ -43,7 +43,7 @@ export function AssetRail(): React.ReactElement {
     <aside className="asset-rail">
       <div className="rail-section rail-project">
         <span className="rail-kicker">Project</span>
-        <div className="rail-title">PixelArtify Studio</div>
+        <div className="rail-title">RipScorpy Media Suite</div>
         <div className="rail-subtitle">
           {graph.nodes.length} nodes · {graph.edges.length} links
         </div>

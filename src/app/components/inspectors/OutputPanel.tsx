@@ -737,6 +737,7 @@ export function OutputPanel({ node }: { node: GraphNode }): React.ReactElement {
               { value: 'vp9', label: 'VP9 / WebM' },
               { value: 'av1', label: 'AV1 / MP4' },
               { value: 'hevc', label: 'HEVC / H.265' },
+              { value: 'prores', label: 'ProRes / MOV' },
             ]}
             onChange={(v) => setVideo({ codec: v as VideoSettings['codec'] })}
           />

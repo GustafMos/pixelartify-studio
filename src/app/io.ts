@@ -17,6 +17,9 @@ export interface DecodedImage {
 const MAX_IMPORT_SIDE = 4096;
 
 export async function decodeImageFile(file: File): Promise<DecodedImage> {
+  if (file.name.toLowerCase().endsWith('.svg') || file.type === 'image/svg+xml') {
+    return decodeSvgFile(file);
+  }
   if (typeof createImageBitmap !== 'function') {
     throw new Error('This browser cannot decode images.');
   }
@@ -40,6 +43,31 @@ export async function decodeImageFile(file: File): Promise<DecodedImage> {
     };
   } finally {
     bitmap.close();
+  }
+}
+
+async function decodeSvgFile(file: File): Promise<DecodedImage> {
+  const url = URL.createObjectURL(file);
+  try {
+    const img = await new Promise<HTMLImageElement>((resolve, reject) => {
+      const el = new Image();
+      el.onload = () => resolve(el);
+      el.onerror = () => reject(new Error('Could not render the SVG file.'));
+      el.src = url;
+    });
+    let width = img.naturalWidth || 1024;
+    let height = img.naturalHeight || 1024;
+    const scale = Math.min(1, MAX_IMPORT_SIDE / Math.max(width, height));
+    width = Math.max(1, Math.round(width * scale));
+    height = Math.max(1, Math.round(height * scale));
+    const canvas = createCanvas(width, height);
+    const ctx = canvas.getContext('2d', { willReadFrequently: true });
+    if (!ctx) throw new Error('Canvas 2D is unavailable.');
+    ctx.drawImage(img, 0, 0, width, height);
+    const image = canvasToPixelImage(canvas);
+    return { image, thumb: makeThumbnail(image, 360), originalWidth: width, originalHeight: height };
+  } finally {
+    URL.revokeObjectURL(url);
   }
 }
 
@@ -203,7 +231,7 @@ export function humanBytes(bytes: number): string {
   return `${(bytes / 1024 / 1024 / 1024).toFixed(2)} GB`;
 }
 
-export const IMAGE_EXTENSIONS = ['png', 'jpg', 'jpeg', 'webp', 'gif', 'bmp', 'avif'];
+export const IMAGE_EXTENSIONS = ['png', 'jpg', 'jpeg', 'webp', 'gif', 'bmp', 'avif', 'svg'];
 export const VIDEO_EXTENSIONS = [
   'mp4', 'webm', 'mov', 'mkv', 'm4v', 'ogv',
   'avi', 'ts', 'mts', 'm2ts', 'wmv', 'flv',

@@ -1706,7 +1706,7 @@ export function StudioProvider({ children }: { children: React.ReactNode }): Rea
         downloadText(
           JSON.stringify(
             {
-              app: 'PixelArtify Studio',
+              app: 'RipScorpy Media Processing Suite',
               source: name,
               artWidth: result.size.width,
               artHeight: result.size.height,
@@ -1767,7 +1767,7 @@ export function StudioProvider({ children }: { children: React.ReactNode }): Rea
         name: `${base}/layers.json`,
         data: JSON.stringify(
           {
-            app: 'PixelArtify Studio',
+            app: 'RipScorpy Media Processing Suite',
             source: activeAsset?.name,
             width: result.size.width,
             height: result.size.height,
@@ -1839,7 +1839,7 @@ export function StudioProvider({ children }: { children: React.ReactNode }): Rea
             name: `${item.name.replace(/\.[^.]+$/, '')}.pixelartify.json`,
             data: JSON.stringify(
               {
-                app: 'PixelArtify Studio',
+                app: 'RipScorpy Media Processing Suite',
                 source: item.name,
                 artWidth: result.size.width,
                 artHeight: result.size.height,

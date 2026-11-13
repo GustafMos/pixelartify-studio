@@ -29,7 +29,7 @@ export function TopBar(): React.ReactElement {
   const [presetOpen, setPresetOpen] = useState(false);
   const [saveOpen, setSaveOpen] = useState(false);
   const [aboutOpen, setAboutOpen] = useState(false);
-  const [name, setName] = useState('My PixelArtify Look');
+  const [name, setName] = useState('My RipScorpy Look');
   const [description, setDescription] = useState('');
   const [search, setSearch] = useState('');
   const importRef = useRef<HTMLInputElement>(null);
@@ -61,14 +61,11 @@ export function TopBar(): React.ReactElement {
     <header className="topbar">
       <div className="brand">
         <span className="brand-mark">
-          <span className="brand-pixel p1" />
-          <span className="brand-pixel p2" />
-          <span className="brand-pixel p3" />
-          <span className="brand-pixel p4" />
+          <img src="./ripscorpy-logo.png" alt="RipScorpy" draggable={false} />
         </span>
         <div className="brand-copy">
-          <strong>PixelArtify</strong>
-          <span>STUDIO</span>
+          <strong>RipScorpy</strong>
+          <span>MEDIA SUITE</span>
         </div>
       </div>
 
@@ -253,7 +250,7 @@ export function TopBar(): React.ReactElement {
 
       <Modal
         open={aboutOpen}
-        title="PixelArtify Studio"
+        title="RipScorpy Media Processing Suite"
         subtitle="MIT-licensed, local-first pixel art conversion."
         onClose={() => setAboutOpen(false)}
         wide
@@ -318,13 +315,13 @@ export function TopBar(): React.ReactElement {
             </div>
             <h3>License</h3>
             <p>
-              PixelArtify Studio is released under the MIT License. Third-party dependencies retain their own
+              RipScorpy Media Processing Suite is released under the MIT License. Third-party dependencies retain their own
               licenses; see <code>THIRD_PARTY_NOTICES.md</code> and <code>CREDITS.md</code>.
             </p>
             <p className="micro-copy">
               Version 0.1.0 · source available on GitHub as{' '}
               <a href="https://github.com/GustafMos/pixelartify-studio" target="_blank" rel="noreferrer">
-                <strong>PixelArtify Studio</strong>
+                <strong>RipScorpy Media Processing Suite</strong>
               </a>
               .
             </p>

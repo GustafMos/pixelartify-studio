@@ -1,8 +1,8 @@
 {
-  "name": "pixelartify-studio",
-  "version": "0.2.1",
+  "name": "ripscorpy-media-processing-suite",
+  "version": "0.3.0",
   "private": false,
-  "description": "PixelArtify Studio â€” edge-aware, resolution-independent pixel art conversion with palettes, dithering, layers and video.",
+  "description": "RipScorpy Media Processing Suite (RSMPS) — edge-aware, resolution-independent pixel art conversion with palettes, dithering, layers, video and a node graph.",
   "bin": {
     "pixelartify": "dist-cli/pixelartify.mjs"
   },

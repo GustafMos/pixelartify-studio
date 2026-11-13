@@ -11,6 +11,7 @@ const TYPE_LABEL: Record<SocketType, string> = {
   palette: 'palette',
   motion: 'motion',
   value: 'value',
+  vector: 'vector',
 };
 
 const TYPE_TONE: Record<SocketType, 'accent' | 'success' | 'warn'> = {
@@ -19,6 +20,7 @@ const TYPE_TONE: Record<SocketType, 'accent' | 'success' | 'warn'> = {
   palette: 'warn',
   motion: 'accent',
   value: 'warn',
+  vector: 'accent',
 };
 
 export function ConnectionsPanel({ node }: { node: GraphNode }): React.ReactElement | null {

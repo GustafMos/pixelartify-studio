@@ -52,7 +52,8 @@ type IconName =
   | 'func'
   | 'move'
   | 'shape'
-  | 'popout';
+  | 'popout'
+  | 'vector';
 
 const PATHS: Record<IconName, React.ReactNode> = {
   image: (
@@ -251,6 +252,12 @@ const PATHS: Record<IconName, React.ReactNode> = {
     <>
       <rect x="4" y="4" width="12" height="12" rx="2" />
       <path d="M20 4h-4M20 4v4M20 4l-8 8" />
+    </>
+  ),
+  vector: (
+    <>
+      <rect x="4" y="4" width="16" height="16" rx="1" />
+      <path d="M4 9h16M4 15h16M9 4v16M15 4v16" />
     </>
   ),
 };

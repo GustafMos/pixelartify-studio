@@ -13,6 +13,25 @@ export interface PixelImage {
   data: Uint8ClampedArray;
 }
 
+/** An axis-aligned rectangle in a vector (pixels-as-rectangles) representation. */
+export interface VectorRect {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  r: number;
+  g: number;
+  b: number;
+  a: number;
+}
+
+/** A raster image expressed as a list of filled rectangles. */
+export interface VectorData {
+  width: number;
+  height: number;
+  rects: VectorRect[];
+}
+
 export interface MaskData {
   width: number;
   height: number;
@@ -188,7 +207,7 @@ export interface DitherSettings {
   threshold: number;
 }
 
-export type ExtractionMethod = 'saliency' | 'chroma' | 'luma' | 'edge' | 'manual' | 'box';
+export type ExtractionMethod = 'saliency' | 'chroma' | 'luma' | 'edge' | 'manual' | 'box' | 'stars';
 
 export interface ExtractionSettings {
   enabled: boolean;
@@ -263,7 +282,7 @@ export interface LayerSettings {
 
 export type OutputFormat = 'png' | 'webp' | 'jpeg';
 export type VideoOutput = 'video' | 'spritesheet' | 'both';
-export type VideoCodec = 'avc' | 'vp9' | 'av1' | 'hevc';
+export type VideoCodec = 'avc' | 'vp9' | 'av1' | 'hevc' | 'prores';
 
 export interface OutputSettings {
   format: OutputFormat;
@@ -357,6 +376,9 @@ export type GraphNodeType =
   | 'switcher'
   | 'shape2d'
   | 'particles'
+  | 'plugin'
+  | 'vectorize'
+  | 'rasterize'
   | 'output';
 
 export interface GraphNode {

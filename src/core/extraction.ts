@@ -48,6 +48,9 @@ export function extractMask(img: PixelImage, settings: ExtractionSettings, artWi
     case 'box':
       mask = boxMask(small, settings);
       break;
+    case 'stars':
+      mask = starsMask(small, settings);
+      break;
     case 'saliency':
     default:
       mask = saliencyMask(small, settings);
@@ -71,6 +74,25 @@ export function extractMask(img: PixelImage, settings: ExtractionSettings, artWi
   const featherPx = Math.max(0, settings.feather * (mask.width / Math.max(1, artWidth)));
   if (featherPx >= 0.5) mask = featherMask(mask, featherPx);
 
+  return mask;
+}
+
+/* -------------------------------------------------------------------------- */
+/* Star / bright-blob detection                                               */
+/* -------------------------------------------------------------------------- */
+
+function starsMask(img: PixelImage, settings: ExtractionSettings): MaskData {
+  const w = img.width;
+  const h = img.height;
+  const t = clamp01(settings.threshold);
+  const soft = Math.max(0.0001, clamp01(settings.softness) * 0.25 + 0.0001);
+  const mask = createMask(w, h);
+  for (let i = 0; i < w * h; i++) {
+    const p = i * 4;
+    const luma = (img.data[p] * 0.2126 + img.data[p + 1] * 0.7152 + img.data[p + 2] * 0.0722) / 255;
+    const v = clamp01((luma - (t - soft)) / (soft * 2));
+    mask.data[i] = Math.round(v * 255);
+  }
   return mask;
 }
 

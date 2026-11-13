@@ -1,5 +1,5 @@
 /**
- * ColorWheel - self-contained HSV color picker for PixelArtify Studio.
+ * ColorWheel - self-contained HSV color picker for RipScorpy Media Processing Suite.
  *
  * Usage:
  *   <ColorWheel value={hex} onChange={setHex} onCreatePalette={openPaletteStudio} />

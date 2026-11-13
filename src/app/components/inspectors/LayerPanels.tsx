@@ -35,6 +35,7 @@ const METHOD_OPTIONS = [
   { value: 'chroma', label: 'Chroma key' },
   { value: 'luma', label: 'Luminance range' },
   { value: 'edge', label: 'Edge / line detail' },
+  { value: 'stars', label: 'Stars / bright blobs' },
   { value: 'manual', label: 'Manual painting' },
 ] as const;
 
