@@ -1396,8 +1396,14 @@ export function StudioProvider({ children }: { children: React.ReactNode }): Rea
     setGraph(nextGraph);
     historyRef.current.push(graph);
     futureRef.current = [];
-    setAssetsByNode({});
-    setActiveAssetIdState(null);
+    // Preserve imported media: the new graph has a fresh input node id, so move
+    // the existing assets onto it instead of clearing them.
+    const inputNode = nextGraph.nodes.find((n) => n.type === 'input');
+    setAssetsByNode((prev) => {
+      const all = Object.values(prev).flat();
+      const unique = all.filter((a, i, arr) => arr.findIndex((b) => b.id === a.id) === i);
+      return unique.length > 0 && inputNode ? { [inputNode.id]: unique } : {};
+    });
     setMaskOverrides({});
     maskCacheRef.current.clear();
     const out = nextGraph.nodes.find((n) => n.type === 'output');
