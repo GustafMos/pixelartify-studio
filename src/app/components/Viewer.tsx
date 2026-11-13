@@ -15,6 +15,7 @@ import { GPU_MIN_LAYER_PIXELS, gpuLayersAvailable } from '../gpuLayers';
 import { Icon } from './icons';
 import { Badge, IconButton, Segmented, Slider, Spinner } from './controls';
 import { TransformGizmo } from './TransformGizmo';
+import { toggleViewerWindow, postArtToViewer, isViewerWindowOpen } from '../viewerWindow';
 
 export function Viewer({ resizeKey }: { resizeKey?: number | string } = {}): React.ReactElement {
   const {
@@ -76,6 +77,7 @@ export function Viewer({ resizeKey }: { resizeKey?: number | string } = {}): Rea
   const animationTimeRef = useRef(animationTime);
   animationTimeRef.current = animationTime;
   const [scale, setScale] = useState(1);
+  const [popped, setPopped] = useState(isViewerWindowOpen());
   const [pan, setPan] = useState({ x: 0, y: 0 });
   const [showGrid, setShowGrid] = useState(true);
   const [compare, setCompare] = useState(false);
@@ -146,6 +148,7 @@ export function Viewer({ resizeKey }: { resizeKey?: number | string } = {}): Rea
     const frame = ctx.createImageData(image.width, image.height, { colorSpace });
     frame.data.set(image.data);
     ctx.putImageData(frame, 0, 0);
+    postArtToViewer(image);
   }, [colorSpace]);
 
   useEffect(() => {
@@ -914,6 +917,12 @@ export function Viewer({ resizeKey }: { resizeKey?: number | string } = {}): Rea
             label={previewFullQuality ? 'Fast preview (lower working resolution)' : 'Full-quality preview'}
             active={!previewFullQuality}
             onClick={() => setPreviewFullQuality(!previewFullQuality)}
+          />
+          <IconButton
+            icon="popout"
+            label={popped ? 'Close popped-out viewer' : 'Pop out viewer (separate window)'}
+            active={popped}
+            onClick={() => setPopped(toggleViewerWindow())}
           />
           <button
             type="button"

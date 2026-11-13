@@ -51,7 +51,8 @@ type IconName =
   | 'hash'
   | 'func'
   | 'move'
-  | 'shape';
+  | 'shape'
+  | 'popout';
 
 const PATHS: Record<IconName, React.ReactNode> = {
   image: (
@@ -244,6 +245,12 @@ const PATHS: Record<IconName, React.ReactNode> = {
     <>
       <circle cx="12" cy="12" r="7" />
       <rect x="4" y="16" width="10" height="5" rx="1" />
+    </>
+  ),
+  popout: (
+    <>
+      <rect x="4" y="4" width="12" height="12" rx="2" />
+      <path d="M20 4h-4M20 4v4M20 4l-8 8" />
     </>
   ),
 };
