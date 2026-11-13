@@ -1118,7 +1118,6 @@ export function GraphCanvas(): React.ReactElement {
             const portCount = Math.max(visibleInputs.length, def.outputs.length);
             const pinned = pinnedFieldList(node);
             const assets = assetsByNode[node.id] ?? [];
-            if (node.type === 'input' && assets.length === 0) return null;
             const previewSrc = node.type === 'input' ? activeAsset?.thumb : showPreview ? selectedPreview : null;
             return (
               <div
