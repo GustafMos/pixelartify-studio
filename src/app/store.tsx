@@ -46,7 +46,7 @@ import {
   type GraphAsset,
   type GraphMediaItem,
 } from '../core/graph';
-import { loadGraph, saveGraph, loadUserPresets, saveUserPresets, loadUserPalettes, saveUserPalettes, loadActivePaletteId, saveActivePaletteId, loadUiMode, saveUiMode, loadRecentNodes, saveRecentNodes, loadColorSpace, saveColorSpace, loadSubgraphs, saveSubgraphs, type ColorSpaceOption, type Subgraph } from './storage';
+import { loadGraph, saveGraph, loadUserPresets, saveUserPresets, loadUserPalettes, saveUserPalettes, loadActivePaletteId, saveActivePaletteId, loadUiMode, saveUiMode, loadRecentNodes, saveRecentNodes, loadColorSpace, saveColorSpace, loadFitPadding, saveFitPadding, loadSubgraphs, saveSubgraphs, type ColorSpaceOption, type Subgraph } from './storage';
 import {
   decodeImageFile,
   downloadText,
@@ -147,6 +147,8 @@ interface StudioContextValue {
   toasts: Toast[];
   colorSpace: ColorSpaceOption;
   setColorSpace: (cs: ColorSpaceOption) => void;
+  fitPadding: number;
+  setFitPadding: (v: number) => void;
   subgraphs: Subgraph[];
   saveGroupAsSubgraph: (groupId: string, name: string) => void;
   deleteSubgraph: (id: string) => void;
@@ -268,6 +270,7 @@ export function StudioProvider({ children }: { children: React.ReactNode }): Rea
   const [trackedMasks, setTrackedMasks] = useState<Record<string, TrackedMaskSequence>>({});
   const [paletteStudioOpen, setPaletteStudioOpen] = useState(false);
   const [colorSpace, setColorSpaceState] = useState<ColorSpaceOption>(() => loadColorSpace());
+  const [fitPadding, setFitPaddingState] = useState<number>(() => loadFitPadding());
   const [subgraphs, setSubgraphs] = useState<Subgraph[]>(() => loadSubgraphs());
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [isExporting, setIsExporting] = useState(false);
@@ -571,6 +574,9 @@ export function StudioProvider({ children }: { children: React.ReactNode }): Rea
     saveColorSpace(colorSpace);
   }, [colorSpace]);
   useEffect(() => {
+    saveFitPadding(fitPadding);
+  }, [fitPadding]);
+  useEffect(() => {
     saveSubgraphs(subgraphs);
   }, [subgraphs]);
 
@@ -644,6 +650,7 @@ export function StudioProvider({ children }: { children: React.ReactNode }): Rea
   const setActivePalette = useCallback((id: string | null) => setActivePaletteIdState(id), []);
   const setPaletteStudioOpenCb = useCallback((open: boolean) => setPaletteStudioOpen(open), []);
   const setColorSpace = useCallback((cs: ColorSpaceOption) => setColorSpaceState(cs), []);
+  const setFitPadding = useCallback((v: number) => setFitPaddingState(Math.max(0, Math.min(200, v))), []);
   const setVideoTime = useCallback((time: number) => setVideoTimeState(Math.max(0, time)), []);
   const setVideoPlaying = useCallback((playing: boolean) => {
     setVideoPlayingState(playing);
@@ -1717,7 +1724,7 @@ export function StudioProvider({ children }: { children: React.ReactNode }): Rea
             null,
             2,
           ),
-          `${name.replace(/\.[^.]+$/, '')}.pixelartify.json`,
+          `${name.replace(/\.[^.]+$/, '')}.rsmps.json`,
         );
       }
       notify('Image exported.', 'success');
@@ -1836,7 +1843,7 @@ export function StudioProvider({ children }: { children: React.ReactNode }): Rea
         });
         if (settings.output.writeManifest) {
           files.push({
-            name: `${item.name.replace(/\.[^.]+$/, '')}.pixelartify.json`,
+            name: `${item.name.replace(/\.[^.]+$/, '')}.rsmps.json`,
             data: JSON.stringify(
               {
                 app: 'RipScorpy Media Processing Suite',
@@ -1932,6 +1939,8 @@ export function StudioProvider({ children }: { children: React.ReactNode }): Rea
     toasts,
     colorSpace,
     setColorSpace,
+    fitPadding,
+    setFitPadding,
     subgraphs,
     saveGroupAsSubgraph,
     deleteSubgraph,

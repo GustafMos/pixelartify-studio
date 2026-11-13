@@ -43,7 +43,7 @@ Usage:
 
 Media:
   -o, --out <dir>            Output directory (default: ./output)
-  -p, --preset <id|file>     Built-in preset id or .pixelartify.json file
+  -p, --preset <id|file>     Built-in preset id or .rsmps.json / .pixelartify.json file
       --preset-file <file>   Preset file (same as --preset with a path)
       --list-presets         Print built-in presets and exit
       --list-dithers         Print dithering algorithms and exit
@@ -397,7 +397,7 @@ async function processImage(file: string, outDir: string, options: Options, pres
     console.log(`  wrote ${target} (${out.result.size.exportWidth}x${out.result.size.exportHeight}, ${out.result.palette.length} colours, ${out.result.stats.durationMs.toFixed(0)}ms)`);
 
     if (settings.output.writeManifest) {
-      const manifestPath = target.replace(/\.(png|webp)$/i, '.pixelartify.json');
+      const manifestPath = target.replace(/\.(png|webp)$/i, '.rsmps.json');
       await writeFile(
         manifestPath,
         `${JSON.stringify(

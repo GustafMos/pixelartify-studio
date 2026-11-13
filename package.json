@@ -4,6 +4,7 @@
   "private": false,
   "description": "RipScorpy Media Processing Suite (RSMPS) — edge-aware, resolution-independent pixel art conversion with palettes, dithering, layers, video and a node graph.",
   "bin": {
+    "rsmps": "dist-cli/pixelartify.mjs",
     "pixelartify": "dist-cli/pixelartify.mjs"
   },
   "engines": {

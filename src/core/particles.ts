@@ -130,11 +130,41 @@ function drawStar(img: PixelImage, x: number, y: number, r: number, color: { r: 
   }
 }
 
+/** Stamp a media instance (a sprite) at a particle position, nearest-sampled. */
+function drawInstance(img: PixelImage, instance: PixelImage, x: number, y: number, size: number, alpha: number): void {
+  const iw = instance.width;
+  const ih = instance.height;
+  const scale = Math.max(0.25, (size * 2) / Math.max(iw, ih));
+  const w = Math.max(1, Math.round(iw * scale));
+  const h = Math.max(1, Math.round(ih * scale));
+  const x0 = Math.floor(x - w / 2);
+  const y0 = Math.floor(y - h / 2);
+  for (let yy = 0; yy < h; yy++) {
+    const py = y0 + yy;
+    if (py < 0 || py >= img.height) continue;
+    for (let xx = 0; xx < w; xx++) {
+      const px = x0 + xx;
+      if (px < 0 || px >= img.width) continue;
+      const sx = Math.min(iw - 1, Math.floor((xx / w) * iw));
+      const sy = Math.min(ih - 1, Math.floor((yy / h) * ih));
+      const si = (sy * iw + sx) * 4;
+      const sa = (instance.data[si + 3] / 255) * alpha;
+      if (sa <= 0) continue;
+      const di = (py * img.width + px) * 4;
+      img.data[di] = img.data[di] + (instance.data[si] - img.data[di]) * sa;
+      img.data[di + 1] = img.data[di + 1] + (instance.data[si + 1] - img.data[di + 1]) * sa;
+      img.data[di + 2] = img.data[di + 2] + (instance.data[si + 2] - img.data[di + 2]) * sa;
+      img.data[di + 3] = Math.min(255, img.data[di + 3] + sa * 255);
+    }
+  }
+}
+
 export function renderParticles(
   width: number,
   height: number,
   params: Partial<ParticleParams> = {},
   time = 0,
+  instance?: PixelImage,
 ): PixelImage {
   const p: ParticleParams = { ...DEFAULT_PARTICLES, ...params };
   const w = Math.max(1, Math.round(width));
@@ -157,6 +187,8 @@ export function renderParticles(
     const [r0, r1] = rand2(p.seed || 1, i);
     let x = 0;
     let y = 0;
+    let vx = 0;
+    let vy = 0;
     let color: { r: number; g: number; b: number } = aRgb;
     let alpha = opacity;
     let draw: 'dot' | 'line' | 'square' | 'star' = p.shape === 'line' ? 'line' : p.shape === 'square' ? 'square' : p.shape === 'star' ? 'star' : 'dot';
@@ -164,8 +196,8 @@ export function renderParticles(
     switch (preset) {
       case 'rain': {
         const angle = dirRad + (r0 - 0.5) * 2 * spreadRad;
-        const vx = Math.sin(angle) * speed;
-        const vy = Math.cos(angle) * speed;
+        vx = Math.cos(angle) * speed;
+        vy = Math.sin(angle) * speed;
         x = wrap(r0 * w + vx * t, w);
         y = wrap(r1 * h + vy * t, h);
         const fall = Math.min(1, speed / 40);
@@ -185,8 +217,10 @@ export function renderParticles(
       }
       case 'custom': {
         const angle = dirRad + (r0 - 0.5) * 2 * spreadRad;
-        x = wrap(r0 * w + Math.sin(angle) * speed * t, w);
-        y = wrap(r1 * h + Math.cos(angle) * speed * t, h);
+        vx = Math.cos(angle) * speed;
+        vy = Math.sin(angle) * speed;
+        x = wrap(r0 * w + vx * t, w);
+        y = wrap(r1 * h + vy * t, h);
         color = mixRgb(aRgb, bRgb, r1);
         break;
       }
@@ -200,10 +234,13 @@ export function renderParticles(
       }
     }
 
-    if (draw === 'line') {
+    if (instance && instance.width > 0 && instance.height > 0) {
+      drawInstance(out, instance, x, y, size, alpha);
+    } else if (draw === 'line') {
       const len = size * (preset === 'rain' ? 6 : 3);
-      const dx = Math.sin(dirRad) * len;
-      const dy = Math.cos(dirRad) * len;
+      const vlen = Math.hypot(vx, vy) || 1;
+      const dx = (vx / vlen) * len;
+      const dy = (vy / vlen) * len;
       drawLine(out, x - dx, y - dy, x + dx, y + dy, size, color, alpha);
     } else if (draw === 'square') {
       drawSquare(out, x, y, size, color, alpha);

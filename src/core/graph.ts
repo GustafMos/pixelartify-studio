@@ -383,6 +383,7 @@ export const NODE_DEFS: Record<GraphNodeType, NodeDefinition> = {
     accent: '#8ecae6',
     inputs: [
       { id: 'media', label: 'Media', type: 'media', optional: true },
+      { id: 'particle', label: 'Instance', type: 'media', optional: true },
       { id: 'motion', label: 'Motion', type: 'motion', optional: true },
     ],
     outputs: [{ id: 'media', label: 'Media', type: 'media' }],
@@ -1326,8 +1327,7 @@ function evaluateNode(
             if (item.kind === 'image') {
               const base = bakeGeneratorInput(item);
               const backdrop = renderBackground(base.sourceWidth, base.sourceHeight, params);
-              const underlay = base.underlay ? compositeOver(backdrop, base.underlay) : backdrop;
-              return { ...base, source: compositeOver(backdrop, base.source), underlay };
+              return { ...base, source: compositeOver(backdrop, base.source) };
             }
             // Video frames decode live, so the backdrop is composited by the
             // render pipeline at art resolution instead of baked here.
@@ -1396,8 +1396,7 @@ function evaluateNode(
               if (width !== base.sourceWidth || height !== base.sourceHeight) {
                 object = resizeImage(object, base.sourceWidth, base.sourceHeight, 'nearest');
               }
-              const overlay = base.overlay ? compositeOver(base.overlay, object) : object;
-              return { ...base, source: compositeOver(base.source, object), overlay };
+              return { ...base, source: compositeOver(base.source, object) };
             }
             // Video: the object is composited by the render pipeline at art
             // resolution, after the live frame has been pixelated.
@@ -1450,6 +1449,8 @@ function evaluateNode(
         params.direction += motion.rotationZ;
         params.opacity = Math.max(0, Math.min(1, params.opacity + (motion.scale - 1)));
       }
+      const instanceValue = inputs.get('particle')?.[0];
+      const instance = instanceValue && instanceValue.type === 'media' ? instanceValue.items[0]?.source : undefined;
       if (!media) {
         let width = Math.max(2, Math.round(params.width));
         let height = Math.max(2, Math.round(params.height));
@@ -1459,13 +1460,13 @@ function evaluateNode(
           width = Math.max(2, Math.round(width * s));
           height = Math.max(2, Math.round(height * s));
         }
-        const image = renderParticles(width, height, params, options.time ?? 0);
+        const image = renderParticles(width, height, params, options.time ?? 0, instance);
         return {
           media: { type: 'media', items: [makeGeneratedItem(node, image, 'Particles', options.time ?? 0)] },
         };
       }
       return {
-        media: compositeGeneratedOverMedia(media, options, (w, h) => renderParticles(w, h, params, options.time ?? 0)),
+        media: compositeGeneratedOverMedia(media, options, (w, h) => renderParticles(w, h, params, options.time ?? 0, instance)),
       };
     }
     case 'plugin': {
@@ -1949,8 +1950,9 @@ function compositeGeneratedOverMedia(
         if (width !== base.sourceWidth || height !== base.sourceHeight) {
           layer = resizeImage(layer, base.sourceWidth, base.sourceHeight, 'nearest');
         }
-        const overlay = base.overlay ? compositeOver(base.overlay, layer) : layer;
-        return { ...base, source: compositeOver(base.source, layer), overlay };
+        // The layer is baked into the source so downstream nodes process it.
+        // No overlay is kept — otherwise the pipeline would composite it again.
+        return { ...base, source: compositeOver(base.source, layer) };
       }
       const size = generatorOverlaySize(item);
       const [width, height] = capSize(size.width, size.height);

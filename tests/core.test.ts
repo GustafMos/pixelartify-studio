@@ -864,10 +864,8 @@ describe('generated backgrounds and 3D primitives', () => {
     const item = mediaAtPort(evaluation, object.id)[0];
     expect(item.sourceWidth).toBe(64);
     expect(item.sourceHeight).toBe(64);
-    expect(item.underlay).toBeDefined();
-    expect(item.overlay).toBeDefined();
     // The transparent source shows the generated checkerboard, and the cube is
-    // composited on top of it.
+    // composited on top of it (baked into the source for stills).
     expect(pixel(item.source, 2, 2)).toEqual([255, 0, 0, 255]);
     expect(pixel(item.source, 20, 2)).toEqual([0, 0, 255, 255]);
     let objectPixels = 0;
@@ -878,16 +876,6 @@ describe('generated backgrounds and 3D primitives', () => {
       if (r > g && g > b && b < 150) objectPixels++;
     }
     expect(objectPixels).toBeGreaterThan(50);
-
-    // Live video frames composite the underlay/overlay via the render pipeline
-    // (after pixelation), rather than being baked into `item.source`.
-    const frame = createImage(64, 64);
-    const rendered = renderPixelArt(
-      { image: frame, masks: item.masks, settings: settingsFromItem(item), underlay: item.underlay, overlay: item.overlay },
-      { upscale: false },
-    );
-    expect(pixel(rendered.artAtPixelScale, 2, 2)).toEqual([255, 0, 0, 255]);
-    expect(pixel(rendered.artAtPixelScale, 20, 2)).toEqual([0, 0, 255, 255]);
   });
 });
 

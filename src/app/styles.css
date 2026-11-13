@@ -4515,6 +4515,31 @@ kbd {
   background: rgba(255, 255, 255, 0.06);
 }
 
+.pad-control {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  color: var(--dim);
+  font-size: 9px;
+}
+
+.pad-control input {
+  width: 34px;
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: 2px;
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 10px;
+  padding: 2px 3px;
+  text-align: right;
+}
+
+.pad-control input:focus {
+  outline: none;
+  border-color: var(--line-bright);
+}
+
 .object3d-offscreen-dot {
   position: absolute;
   z-index: 8;

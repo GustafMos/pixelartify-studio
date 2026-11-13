@@ -126,6 +126,15 @@ export function saveColorSpace(colorSpace: ColorSpaceOption): void {
   saveJSON('colorSpace', colorSpace);
 }
 
+export function loadFitPadding(): number {
+  const v = loadJSON<number>('fitPadding', 3);
+  return Number.isFinite(v) ? Math.max(0, Math.min(200, v)) : 3;
+}
+
+export function saveFitPadding(v: number): void {
+  saveJSON('fitPadding', v);
+}
+
 /** A reusable group of nodes saved by the user. */
 export interface Subgraph {
   id: string;

@@ -560,5 +560,5 @@ function normalizeGraph(input: PipelineGraph): PipelineGraph {
 }
 
 export function downloadPresetName(preset: Preset): string {
-  return `${preset.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')}.pixelartify.json`;
+  return `${preset.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')}.rsmps.json`;
 }

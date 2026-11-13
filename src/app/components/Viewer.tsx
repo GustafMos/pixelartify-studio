@@ -60,6 +60,8 @@ export function Viewer({ resizeKey }: { resizeKey?: number | string } = {}): Rea
     setPreviewFullQuality,
     colorSpace,
     setColorSpace,
+    fitPadding,
+    setFitPadding,
   } = useStudio();
 
   const viewportRef = useRef<HTMLDivElement>(null);
@@ -708,7 +710,7 @@ export function Viewer({ resizeKey }: { resizeKey?: number | string } = {}): Rea
     (size?: { width: number; height: number }) => {
       const el = viewportRef.current;
       if (!el || !art) return;
-      const padding = 24;
+      const padding = fitPadding;
       const width = size?.width ?? el.clientWidth;
       const height = size?.height ?? el.clientHeight;
       const availableW = Math.max(24, width - padding * 2);
@@ -717,7 +719,7 @@ export function Viewer({ resizeKey }: { resizeKey?: number | string } = {}): Rea
       setScale(Math.max(0.1, Math.min(24, s)));
       setPan({ x: 0, y: 0 });
     },
-    [art],
+    [art, fitPadding],
   );
 
   const fitNow = useCallback(() => {
@@ -962,6 +964,20 @@ export function Viewer({ resizeKey }: { resizeKey?: number | string } = {}): Rea
             active={autoFit}
             onClick={fitNow}
           />
+          <label className="pad-control" title="Padding (px) around the image when fitted">
+            <input
+              type="number"
+              min={0}
+              max={200}
+              step={1}
+              value={fitPadding}
+              onChange={(e) => {
+                const n = Number(e.target.value);
+                if (Number.isFinite(n)) setFitPadding(n);
+              }}
+            />
+            <span>pad</span>
+          </label>
           <IconButton icon="grid" label="Toggle pixel grid" active={showGrid} onClick={() => setShowGrid((v) => !v)} />
           <IconButton icon="eye" label="Compare with source" active={compare} onClick={() => setCompare((v) => !v)} />
           <IconButton
