@@ -320,7 +320,7 @@ export function TopBar(): React.ReactElement {
             </p>
             <p className="micro-copy">
               Version 0.1.0 · source available on GitHub as{' '}
-              <a href="https://github.com/GustafMos/pixelartify-studio" target="_blank" rel="noreferrer">
+              <a href="https://github.com/GustafMos/rsmps" target="_blank" rel="noreferrer">
                 <strong>RipScorpy Media Processing Suite</strong>
               </a>
               .

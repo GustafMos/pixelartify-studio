@@ -1,12 +1,12 @@
 # PixelArtify Studio
 
-[![CI](https://github.com/GustafMos/pixelartify-studio/actions/workflows/ci.yml/badge.svg)](https://github.com/GustafMos/pixelartify-studio/actions/workflows/ci.yml)
-[![Deploy](https://github.com/GustafMos/pixelartify-studio/actions/workflows/deploy.yml/badge.svg)](https://github.com/GustafMos/pixelartify-studio/actions/workflows/deploy.yml)
+[![CI](https://github.com/GustafMos/rsmps/actions/workflows/ci.yml/badge.svg)](https://github.com/GustafMos/rsmps/actions/workflows/ci.yml)
+[![Deploy](https://github.com/GustafMos/rsmps/actions/workflows/deploy.yml/badge.svg)](https://github.com/GustafMos/rsmps/actions/workflows/deploy.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-4cc9f0.svg)](LICENSE)
 
 **Edge-aware, resolution-independent pixel art at scale — with a node graph, palettes, dithering, layer separation, video and spritesheets.**
 
-**Live demo:** <https://gustafmos.github.io/pixelartify-studio/>
+**Live demo:** <https://gustafmos.github.io/rsmps/>
 
 **Changelog:** [CHANGELOG.md](CHANGELOG.md) · current version **0.2.1**
 
@@ -53,8 +53,8 @@ PixelArtify Studio turns drawings, photos and videos into deliberate pixel art. 
 ## Quick start
 
 ```bash
-git clone https://github.com/GustafMos/pixelartify-studio.git pixelartify-studio
-cd pixelartify-studio
+git clone https://github.com/GustafMos/rsmps.git rsmps
+cd rsmps
 npm install
 npm run dev
 ```

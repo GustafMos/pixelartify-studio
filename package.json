@@ -12,10 +12,10 @@
   "type": "module",
   "license": "MIT",
   "author": "PixelArtify Studio contributors",
-  "homepage": "https://github.com/GustafMos/pixelartify-studio",
+  "homepage": "https://github.com/GustafMos/rsmps",
   "repository": {
     "type": "git",
-    "url": "https://github.com/GustafMos/pixelartify-studio.git"
+    "url": "https://github.com/GustafMos/rsmps.git"
   },
   "keywords": [
     "pixel-art",
