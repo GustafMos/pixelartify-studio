@@ -22,6 +22,7 @@ import {
   WebMOutputFormat,
   canEncodeVideo,
   getFirstEncodableAudioCodec,
+  type AudioCodec,
   type InputVideoTrack,
   type VideoCodec,
   type VideoSample,
@@ -542,10 +543,14 @@ export class VideoWriter {
     // Mux the original audio when available.
     const audioSamples = this.options.audioSamples;
     if (audioSamples && audioSamples.length > 0) {
-      const audioCodec = await getFirstEncodableAudioCodec(['aac', 'opus', 'mp3', 'vorbis']).catch(() => null);
+      const audioCodecs: AudioCodec[] =
+        this.resolvedFormat === 'webm' ? ['opus', 'vorbis'] : ['aac', 'mp3', 'opus'];
+      const audioCodec = await getFirstEncodableAudioCodec(audioCodecs).catch(() => null);
       if (audioCodec) {
         try {
-          const audioSource = new AudioSampleSource({ codec: audioCodec, quality });
+          // Audio uses its own (much lower) bitrate; never reuse the video bitrate.
+          const audioQuality = new Quality({ bitrate: 160_000 });
+          const audioSource = new AudioSampleSource({ codec: audioCodec, quality: audioQuality });
           output.addAudioTrack(audioSource);
           this.audioSource = audioSource;
         } catch {
