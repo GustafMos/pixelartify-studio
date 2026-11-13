@@ -11,12 +11,12 @@ interface PlaybackState {
 }
 
 /**
- * Standalone viewer window (opened via `?viewer=1`). Receives frames and
- * playback state from the opener via postMessage, and sends play/pause/seek
- * controls back. The image is auto-fit with pixelated rendering.
+ * Standalone viewer window (opened via `?viewer=1`). Receives raw RGBA frames
+ * and playback state from the opener via postMessage, and sends play/pause/seek
+ * controls back. Frames are drawn straight to a canvas (no re-encoding).
  */
 export function PopupViewer(): React.ReactElement {
-  const [src, setSrc] = useState<string | null>(null);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
   const [size, setSize] = useState({ width: 0, height: 0 });
   const [pb, setPb] = useState<PlaybackState>({
     playing: false,
@@ -35,8 +35,19 @@ export function PopupViewer(): React.ReactElement {
       const d = e.data;
       if (!d || typeof d !== 'object') return;
       if (d.type === 'art') {
-        setSrc(typeof d.url === 'string' ? d.url : null);
-        setSize({ width: Number(d.width) || 0, height: Number(d.height) || 0 });
+        const canvas = canvasRef.current;
+        if (!canvas) return;
+        const w = Number(d.width) || 0;
+        const h = Number(d.height) || 0;
+        if (w <= 0 || h <= 0) return;
+        if (canvas.width !== w) canvas.width = w;
+        if (canvas.height !== h) canvas.height = h;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) return;
+        const img = ctx.createImageData(w, h);
+        img.data.set(new Uint8ClampedArray(d.data as ArrayBuffer | number[]));
+        ctx.putImageData(img, 0, 0);
+        setSize({ width: w, height: h });
       } else if (d.type === 'playback') {
         setPb({
           playing: Boolean(d.playing),
@@ -61,14 +72,18 @@ export function PopupViewer(): React.ReactElement {
   return (
     <div className="popup-viewer">
       <div className="popup-stage">
-        {src ? (
-          <img src={src} alt="" draggable={false} />
-        ) : (
+        {size.width > 0 ? null : (
           <div className="popup-empty">
             <span>Waiting for preview…</span>
-            <small>{size.width ? `${size.width} × ${size.height}` : 'Open a graph in the main window.'}</small>
+            <small>Open a graph in the main window.</small>
           </div>
         )}
+        <canvas
+          ref={canvasRef}
+          className="popup-canvas"
+          style={{ opacity: size.width > 0 ? 1 : 0 }}
+          aria-label="Pixel art preview"
+        />
       </div>
 
       {pb.hasTimeline ? (

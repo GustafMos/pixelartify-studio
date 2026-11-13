@@ -5,7 +5,6 @@
  */
 
 import type { PixelImage } from '../core/types';
-import { pixelImageToDataUrl } from './io';
 
 let viewerWindow: Window | null = null;
 
@@ -52,10 +51,27 @@ function post(msg: Record<string, unknown>): void {
   }
 }
 
+let lastArtPush = 0;
+
 /** Push a rendered frame to the popup. Cheap no-op when the window is closed. */
 export function postArtToViewer(image: PixelImage): void {
-  if (!viewerWindow || viewerWindow.closed) return;
-  post({ type: 'art', url: pixelImageToDataUrl(image), width: image.width, height: image.height });
+  if (!viewerWindow || viewerWindow.closed) {
+    viewerWindow = null;
+    return;
+  }
+  const now = performance.now();
+  if (now - lastArtPush < 33) return; // throttle to ~30 fps
+  lastArtPush = now;
+  try {
+    // Send raw RGBA (structured-cloned) rather than an encoded image — the
+    // popup draws it straight to a canvas, avoiding per-frame PNG encode/decode.
+    viewerWindow.postMessage(
+      { type: 'art', width: image.width, height: image.height, data: image.data },
+      '*',
+    );
+  } catch {
+    // Window may be navigating; ignore.
+  }
 }
 
 export function postPlaybackToViewer(state: ViewerPlaybackState): void {
